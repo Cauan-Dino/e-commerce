@@ -15,7 +15,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from cryptography.fernet import Fernet
 import hashlib
 
-
 app = FastAPI()
 security = HTTPBasic()
 
