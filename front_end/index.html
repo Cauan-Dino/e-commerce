@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minha Loja API</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>🛒 E-Commerce API Manager</h1>
+        <nav>
+            <button onclick="showSection('produtos')">Produtos</button>
+            <button onclick="showSection('carrinho')">Meu Carrinho</button>
+            <button onclick="showSection('usuario')">Usuários</button>
+            <button onclick="showSection('admin')" style="background-color: #475569;">Admin</button>
+        </nav>
+    </header>
+
+    <main>
+        <section id="produtos-section">
+            <h2>Produtos Disponíveis</h2>
+            <div class="filters">
+                <input type="text" id="search-nome" placeholder="Buscar por nome...">
+                <button onclick="loadProdutos()">Filtrar</button>
+            </div>
+            <div id="lista-produtos" class="grid-container"></div>
+        </section>
+
+        <section id="carrinho-section" style="display:none;">
+            <h2>Seu Carrinho</h2>
+            <div class="input-group">
+                <input type="number" id="input-usuario-id" placeholder="ID do Usuário">
+                <button onclick="loadCarrinho()">Ver Carrinho</button>
+            </div>
+            <div id="detalhe-carrinho"></div>
+        </section>
+
+        <section id="usuario-section" style="display:none;">
+            <h2>Cadastrar Usuário</h2>
+            <form id="form-usuario">
+                <input type="text" id="nome-usuario" placeholder="Nome" required>
+                <input type="email" id="email-usuario" placeholder="E-mail" required>
+                <button type="submit">Cadastrar</button>
+            </form>
+        </section>
+
+        <section id="admin-section" style="display:none;">
+            <h2>Painel do Administrador (Adicionar Produto)</h2>
+            <form id="form-admin-produto" enctype="multipart/form-data">
+                <div class="auth-box" style="background: #eee; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                    <input type="text" id="admin-user" placeholder="Usuário Admin" required>
+                    <input type="password" id="admin-pass" placeholder="Senha Admin" required>
+                </div>
+                
+                <div class="input-group">
+                    <input type="text" id="prod-nome" placeholder="Nome do Produto" required>
+                    <input type="number" step="0.01" id="prod-preco" placeholder="Preço (Ex: 99.90)" required>
+                    <input type="text" id="prod-categoria" placeholder="Categoria" required>
+                    
+                    <label for="prod-file" style="margin-left: 10px;">Foto:</label>
+                    <input type="file" id="prod-file" accept="image/*" required>
+                    
+                    <button type="submit" style="background-color: #16a34a;">Cadastrar Produto</button>
+                </div>
+            </form>
+            <hr>
+            <button onclick="limparCache()" style="background-color: #dc2626; color: white; padding: 10px; border: none; border-radius: 4px; cursor: pointer;">
+                Limpar Cache do Redis
+            </button>
+            <div id="admin-feedback" style="margin-top: 15px; font-weight: bold;"></div>
+        </section>
+    </main>
+
+    <script src="script.js"></script>
+</body>
+</html>
