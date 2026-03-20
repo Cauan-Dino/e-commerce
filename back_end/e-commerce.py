@@ -1,10 +1,10 @@
 import redis
-from fastapi import HTTPException,FastAPI,Depends,UploadFile,File,Form
+from fastapi import HTTPException,FastAPI,Depends,UploadFile,File,Form, Request
 from sqlalchemy.orm import sessionmaker,declarative_base,Mapped,mapped_column,relationship,Session
-from sqlalchemy import create_engine,ForeignKey     
+from sqlalchemy import create_engine,ForeignKey,String
 from fastapi.security import HTTPBasic,HTTPBasicCredentials
 import os
-from pydantic import BaseModel
+from pydantic import BaseModel,EmailStr
 import json
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=".env")
@@ -14,6 +14,34 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from cryptography.fernet import Fernet
 import hashlib
+import jwt
+from datetime import datetime, timedelta
+from authlib.integrations.starlette_client import OAuth
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+
+oauth = OAuth()
+
+oauth.register(
+    name='google',
+    client_id=os.getenv("CLIENT_ID"),
+    client_secret=os.getenv("CLIENT_SECRECT"),
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+    client_kwargs={
+        "scope": "openid email profile"
+    }
+)
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+
+def criar_token(usuario_id: int):
+    payload = {
+        "sub": str(usuario_id),
+        "exp": datetime.utcnow() + timedelta(hours=2)
+    }
+
+    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
 app = FastAPI()
 security = HTTPBasic()
@@ -53,10 +81,13 @@ redis_client2 = redis.Redis(host='localhost',db=1,decode_responses=True,port=637
 # Tabela Usuario
 class UsuarioDB(Base):
     __tablename__ = 'usuario'
-    usuario_id: Mapped[int] = mapped_column(primary_key=True,index=True)
+
+    usuario_id: Mapped[int] = mapped_column(primary_key=True, index=True)
+
     nome_usuario: Mapped[str] = mapped_column(index=True)
-    cpf: Mapped[str] = mapped_column(index=True,unique=True)
-    hash_cpf: Mapped[str] = mapped_column(unique=True)
+    email: Mapped[str] = mapped_column(unique=True, index=True)
+    google_id: Mapped[str] = mapped_column(unique=True, index=True, nullable=True)
+    senha_usuario: Mapped[str] = mapped_column(nullable=True)
 
     carrinho = relationship('CarrinhoUsuarioDB', back_populates='usuario')
 
@@ -76,7 +107,8 @@ class CarrinhoUsuarioDB(Base):
     __tablename__ = 'carrinho'
     id: Mapped[int] = mapped_column(index=True,primary_key=True)
 
-    carrinho_id: Mapped[int] = mapped_column(ForeignKey('criar_carrinho.carrinho_id'),index=True)
+    # Carrinho_id proviniente da tabela que CriarCarrinhoDB
+    carrinho_id: Mapped[int] = mapped_column(ForeignKey('criar_carrinho.carrinho_id',ondelete="CASCADE"),index=True)
     carrinho_usuario_id: Mapped[int] = mapped_column(ForeignKey('usuario.usuario_id'),index=True)
     produto_id: Mapped[int] = mapped_column(ForeignKey('produtos_loja.produto_id'),index=True)
 
@@ -120,11 +152,11 @@ class CartoesDB(Base):
     usuario_id: Mapped[int] = mapped_column(index=True)
     nome_cartao: Mapped[str] = mapped_column(index=True)
     hash_cartao: Mapped[str] = mapped_column(index=True,unique=True)    
-    cartao_credito: Mapped[str] = mapped_column(index=True,unique=True,nullable=True)
-    cartao_debito: Mapped[str] = mapped_column(index=True,unique=True,nullable=True)
+    cartao_credito: Mapped[str] = mapped_column(index=True, nullable=True)
+    cartao_debito: Mapped[str] = mapped_column(index=True, nullable=True)
     nome_do_usuario_do_cartao: Mapped[str] = mapped_column(index=True)
-    cvc: Mapped[str] = mapped_column(index=True)
     data_validade_cartao: Mapped[str] = mapped_column(index=True)
+    ultimos_4: Mapped[str] = mapped_column(String(4))
 
 # Tabela que confirma o pagemnto
 class ConfirmarPagamentoDB(Base):
@@ -134,6 +166,7 @@ class ConfirmarPagamentoDB(Base):
     
     endereco_nomeado: Mapped[str] = mapped_column(ForeignKey('endereco_usuario.endereco_nomeado'),index=True)
     carrinho_id: Mapped[int] = mapped_column(ForeignKey('carrinho.carrinho_id'),index=True)
+    nome_cartao: Mapped[str] = mapped_column(ForeignKey('cartoes.nome_cartao'))
 
     endereco = relationship('EnderecoUsuarioDB',back_populates='confirmar_pagamento')
     carrinho = relationship('CarrinhoUsuarioDB',back_populates='confirmar_pagamento')
@@ -142,8 +175,17 @@ Base.metadata.create_all(bind=engine)
 
 # Criacao do body model
 class BODYUsuario(BaseModel):
+    email: EmailStr
+    senha_usuario: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+class BODYCadastrarUsuario(BaseModel):
     nome_usuario: str
-    cpf: str
+    email: EmailStr
+    senha_usuario: str
+    confirmar_senha: str
 
 class BODYProdutosLoja(BaseModel):
     nome_produto: str
@@ -176,7 +218,6 @@ class BODYCartao(BaseModel):
     cartao_debito: Optional[str] = None
     data_validade_cartao: str
     nome_do_usuario_do_cartao: str
-    cvc: str
 
 class BODYConfirmarPagamento(BaseModel):
     usuario_id: int
@@ -192,7 +233,6 @@ class BODYCartaoPUT(BaseModel):
     cartao_debito: Optional[str] = None
     data_validade_cartao: Optional[str] = None
     nome_do_usuario_do_cartao: Optional[str] = None
-    cvc: Optional[str] = None
 
 class BODYEnderecoUsuarioPUT(BaseModel):
     usuario_id: int
@@ -215,6 +255,42 @@ def sessao_db():
         yield db
     finally:
         db.close()
+
+@app.get("/login/google")
+async def login_google(request: Request):
+    redirect_uri = request.url_for("auth_google")
+    return await oauth.google.authorize_redirect(request, redirect_uri)
+
+@app.get("/auth/google")
+async def auth_google(request: Request, db: Session = Depends(sessao_db)):
+
+    token = await oauth.google.authorize_access_token(request)
+    user = token.get("userinfo")
+
+    google_id = user["sub"]
+
+    usuario = db.query(UsuarioDB).filter(
+        UsuarioDB.google_id == google_id
+    ).first()
+
+    if not usuario:
+        usuario = UsuarioDB(
+            google_id=google_id,
+            email=user["email"],
+            nome_usuario=user["name"]
+        )
+        db.add(usuario)
+        db.commit()
+        db.refresh(usuario)
+
+    token_jwt = criar_token(usuario.usuario_id)
+
+    return {
+        "message": "Login realizado com sucesso",
+        "token": token_jwt,
+        "usuario": BODYUsuario.model_validate(usuario)
+    }
+
     
 # Autorizacao para adicionar um produto
 def autorizacao(credenciais: HTTPBasicCredentials = Depends(security)):
@@ -266,7 +342,7 @@ async def mostrar_usuarios(db: Session = Depends(sessao_db),page: int = 1,limit:
         {
             'nome': valor.nome_usuario,
             'id': valor.usuario_id,
-            'cpf': valor.cpf
+            'email': valor.email
         }
         for valor in query
     ]
@@ -435,7 +511,9 @@ async def mostrar_endereco(usuario_id: int,db: Session = Depends(sessao_db)):
             'bairro': valor.bairro,
             'numero': valor.numero,
             'cidade': valor.cidade,
-            'estado': valor.estado
+            'estado': valor.estado,
+            'complementeo': valor.complemento,
+            'cep': valor.cep
         })
 
     redis_client2.setex(f'endereco:{usuario_id}',300,json.dumps(dicionario_redis))
@@ -445,37 +523,6 @@ async def mostrar_endereco(usuario_id: int,db: Session = Depends(sessao_db)):
 # ==============
 # |    POST    |
 # ==============
-
-# Cria um usuario
-@app.post('/site/usuario', response_model=BODYUsuario)
-async def criar_usuario(body: BODYUsuario, db: Session = Depends(sessao_db)):
-
-    dados = body.model_dump()
-    
-    # gera hash do cpf
-    hash_cpf = hashlib.sha256(dados["cpf"].encode()).hexdigest()
-
-    # Verifica duplicidade
-    duplicidade = db.query(UsuarioDB).filter(UsuarioDB.hash_cpf == hash_cpf).first()
-    if duplicidade:
-        raise HTTPException(
-            status_code=400,
-            detail='CPF ja cadastrado'
-        )
-
-    # criptografa o cpf
-    dados["cpf"] = criptografar(dados["cpf"])
-
-    # Salva hash 
-    dados["hash_cpf"] = hash_cpf
-
-    usuario = UsuarioDB(**dados)
-
-    db.add(usuario)
-    db.commit()
-    db.refresh(usuario)
-
-    return usuario
 
 # Adiciona um produto no site
 @app.post('/site/produto/adicionar')
@@ -635,75 +682,64 @@ async def criar_endereco(body:BODYEnderecoUsuario ,db: Session = Depends(sessao_
     return adicionar_endereco
 
 # Adiciona a forma de pagamento
-@app.post('/site/pagamento',response_model=BODYCartao)
-async def adicionar_forma_pagamento(body: BODYCartao,db: Session = Depends(sessao_db)):
-    # Atribui um valor None para evitar o erro
-    hash_cartao = None
-    verificacao_hash_cartao = None
+@app.post('/site/pagamento', response_model=BODYCartao)
+async def adicionar_forma_pagamento(body: BODYCartao, db: Session = Depends(sessao_db)):
 
-    # Verifica se o usuario existe
+    # Verifica se o usuário existe
     usuario = db.query(UsuarioDB).filter(UsuarioDB.usuario_id == body.usuario_id).first()
-    if usuario is None:
-        raise HTTPException(
-            status_code=404,
-            detail='Esse usuario nao existe'
-        )
+    if not usuario:
+        raise HTTPException(404, 'Esse usuário não existe')
 
-    # Verifica se ja existe um cartao com esse nome
-    nome_cartao = db.query(CartoesDB).filter(CartoesDB.nome_cartao == body.nome_cartao, CartoesDB.usuario_id == body.usuario_id).first()
-    if nome_cartao:
-        raise HTTPException(
-            status_code=400,
-            detail='Voce ja possui um cartao com esse nome'
-        )
+    # Verifica nome duplicado
+    if db.query(CartoesDB).filter(
+        CartoesDB.nome_cartao == body.nome_cartao,
+        CartoesDB.usuario_id == body.usuario_id
+    ).first():
+        raise HTTPException(400, 'Você já possui um cartão com esse nome')
 
-    # Verifica se o usuario colocou algo nos campos de cartoes de credito
-    if body.cartao_credito is None and body.cartao_debito is None:
-        raise HTTPException(
-            status_code=400,
-            detail='Voce deve colocar algum cartao de credito'
-        )
+    # Deve ter pelo menos um tipo de cartão
+    if not (body.cartao_credito or body.cartao_debito):
+        raise HTTPException(400, 'Você deve informar um cartão')
 
-    cartao = body.model_dump()
+    # Número do cartão (crédito ou débito)
+    numero = body.cartao_credito or body.cartao_debito
+    numero_limpo = numero.replace(" ", "")
+
+    # Validação simples: apenas dígitos e tamanho 13-19
+    if not numero_limpo.isdigit() or not 13 <= len(numero_limpo) <= 19:
+        raise HTTPException(400, 'Número do cartão inválido')
 
     # Gera hash
-    if cartao["cartao_credito"] is not None:
-        hash_cartao = hashlib.sha256(cartao["cartao_credito"].encode()).hexdigest()
-    
-    elif cartao["cartao_debito"] is not None:
-        hash_cartao = hashlib.sha256(cartao["cartao_debito"].encode()).hexdigest()
-    
-    # Verifica se ha duplicidade
-    verificacao_hash_cartao = db.query(CartoesDB).filter(CartoesDB.hash_cartao == hash_cartao).first()
+    hash_cartao = hashlib.sha256(numero_limpo.encode()).hexdigest()
 
-    # Tratamento de erro caso o cartao ja exista
-    if verificacao_hash_cartao:
-        raise HTTPException(
-            status_code=400,
-            detail='Ocorreu um erro'
-        )
+    # Verifica duplicidade por usuário
+    if db.query(CartoesDB).filter(
+        CartoesDB.hash_cartao == hash_cartao,
+        CartoesDB.usuario_id == body.usuario_id
+    ).first():
+        raise HTTPException(400, 'Não foi possível processar o cadastro do cartão')
 
-    # criptografa o cartao de credito
-    if cartao["cartao_credito"] is not None:
-        cartao["cartao_credito"] = criptografar(cartao["cartao_credito"])
-     
-    # criptografa de debito
-    if cartao["cartao_debito"] is not None:
-        cartao["cartao_debito"] = criptografar(cartao["cartao_debito"])
+    # Criptografa números
+    cartao_credito = criptografar(numero_limpo) if body.cartao_credito else None
+    cartao_debito = criptografar(numero_limpo) if body.cartao_debito else None
 
-    # Criptografa o cvc
-    cartao['cvc'] = criptografar(cartao['cvc'])
+    # Salva apenas hash e últimos 4
+    novo_cartao = CartoesDB(
+        usuario_id=body.usuario_id,
+        nome_cartao=body.nome_cartao,
+        hash_cartao=hash_cartao,
+        cartao_credito=cartao_credito,
+        cartao_debito=cartao_debito,
+        nome_do_usuario_do_cartao=body.nome_do_usuario_do_cartao,
+        data_validade_cartao=body.data_validade_cartao,
+        ultimos_4=numero_limpo[-4:]
+    )
 
-    # Salva o hash
-    cartao['hash_cartao'] = hash_cartao
-
-    cartoes = CartoesDB(**cartao)
-
-    db.add(cartoes)
+    db.add(novo_cartao)
     db.commit()
-    db.refresh(cartoes)
+    db.refresh(novo_cartao)
 
-    return cartoes
+    return novo_cartao
 
 # Finaliza o pagamento
 @app.post('/site/finalizar-compra')
@@ -759,11 +795,68 @@ async def finalizar_compra(body: BODYConfirmarPagamento, db: Session = Depends(s
 
     return {
         'message':'Envio realizado com sucesso.',
-        'endereco': f'Endereco de envio: bairro:{envio.endereco.bairro},numero: {envio.endereco.numero},estado: {envio.endereco.estado},cidade: {envio.endereco.cidade},cep: {envio.endereco.cep}',
+        'endereco': f'Endereço de envio: bairro:{envio.endereco.bairro},número: {envio.endereco.numero},estado: {envio.endereco.estado},cidade: {envio.endereco.cidade},cep: {envio.endereco.cep}',
         'usuario': f'carrinho escolhido: {body.carrinho_id}',
         'Produtos enviados': produtos
         }
     
+# Login no site pelo site
+@app.post('/site/login-usuario')
+async def login_site_usuario(body: BODYUsuario, db: Session = Depends(sessao_db)):
+    # Verifica se o usuario existe
+    usuario = db.query(UsuarioDB).filter(UsuarioDB.email == body.email).first()
+    if usuario is None:
+        raise HTTPException(
+            status_code=404,
+            detail='Senha ou email incorretos'
+        )
+    
+    senha_valida = pwd_context.verify(body.senha_usuario, usuario.senha_usuario)
+    if not senha_valida:
+        raise HTTPException(
+            status_code=401,
+            detail='Senha ou email incorretos'
+        )
+    
+    return {"message": f"Login realizado com sucesso, bem-vindo {usuario.nome_usuario}!"}
+
+
+# Cadastra no site pelo site
+@app.post('/site/cadastro-usuario')
+async def cadastrar_site_usuario(body: BODYCadastrarUsuario, db: Session = Depends(sessao_db)):
+    # Verifica se o usuario ja possui cadastro no site
+    usuario = db.query(UsuarioDB).filter(
+        UsuarioDB.email == body.email
+        ).first()
+    
+    if usuario:
+        raise HTTPException(
+            status_code=400,
+            detail='Você já possui esse email cadastrado.'
+        )
+
+    # Verifica se senha e confirmar senha sao iguais
+    senha = secrets.compare_digest(body.senha_usuario, body.confirmar_senha)
+    if not senha:
+        raise HTTPException(
+            status_code=400,
+            detail='As senhas devem ser iguais'
+        )
+    
+    hash_senha = pwd_context.hash(body.senha_usuario)
+    
+    # Adiciona no banco de dados
+    adicionar = UsuarioDB(
+        nome_usuario=body.nome_usuario,
+        senha_usuario=hash_senha,
+        email=body.email,
+    )
+    
+    db.add(adicionar)
+    db.commit()
+    db.refresh(adicionar)
+
+    return {'message':'Cadastro realizado com sucesso'}
 
 # ===============
 # |    DELETE   |
@@ -810,9 +903,9 @@ async def deletar_endereco(usuario_id: int,endereco_nomeado: str, db: Session = 
             if v['endereco_nomeado'] == endereco_nomeado:
                 del lista[i]
         
-        redis_client2.setex(f'endereco:{usuario_id}',300,lista)
+        redis_client2.setex(f'endereco:{usuario_id}',300,json.loads(lista))
     
-    return verificacao
+    return {'message':'Endereço deletado com sucesso!'}
 
 # Deletar carrinho
 @app.delete('/site/carrinho/{usuario_id}/{carrinho_id}')
@@ -855,7 +948,7 @@ async def deletar_produto_carrinho(usuario_id: int, produto_id: int, db: Session
     if item_carrinho is None:
         raise HTTPException(
             status_code=404,
-            detail='Esse item não existe'
+            detail='Item não encontrado.'
         )
     db.delete(item_carrinho)
     db.commit()
@@ -869,49 +962,82 @@ async def deletar_produto_carrinho(usuario_id: int, produto_id: int, db: Session
 
 # Altera o cartao ja cadastrado
 @app.put('/site/cartao/{nome_cartao}')
-async def alterar_cartao(nome_cartao:str,body: BODYCartaoPUT,db: Session = Depends(sessao_db)):
-    # Verifica se o usuario possui algum cartao cadastrado
-    usuario = db.query(CartoesDB).filter(CartoesDB.usuario_id == body.usuario_id,CartoesDB.nome_cartao == nome_cartao).first()
-    if usuario is None:
+async def alterar_cartao(nome_cartao: str, body: BODYCartaoPUT, db: Session = Depends(sessao_db)):
+    
+    cartao_db = db.query(CartoesDB).filter(
+        CartoesDB.usuario_id == body.usuario_id,
+        CartoesDB.nome_cartao == nome_cartao
+    ).first()
+
+    if cartao_db is None:
         raise HTTPException(
             status_code=404,
-            detail='Esse usuario nao possui nenhum cartao cadastrado'
+            detail='Cartão não encontrado'
         )
-    
-    # Verifica se o usuario colocou algo no body
+
+    # ❗ Deve enviar pelo menos um número
     if body.cartao_credito is None and body.cartao_debito is None:
         raise HTTPException(
             status_code=400,
-            detail='Voce deve colocar um numero do cartao de credito'
+            detail='Dados inválidos'
         )
 
-    cartao = body.model_dump()
+    # ❗ Não pode enviar os dois
+    if body.cartao_credito and body.cartao_debito:
+        raise HTTPException(
+            status_code=400,
+            detail='Dados inválidos'
+        )
 
-    # Verifica se no body o campo cartao_credito esta vazio
-    if body.cartao_credito is not None:
-        usuario.cartao_credito = criptografar(cartao["cartao_credito"])
-    # Verifica se no body o campo cartao_debito esta vazio
-    if body.cartao_debito is not None:
-        usuario.cartao_debito = criptografar(cartao['cartao_debito'])
-    # Verifica se no body o campo cvc esta vazio
-    if body.cvc is not None:
-        usuario.cvc = criptografar(cartao['cvc'])
-    # Verifica se no body o campo data_validade_cartao esta vazio
-    if body.data_validade_cartao is not None:
-        usuario.data_validade_cartao = body.data_validade_cartao
-    # Verifica se no body o campo nome_do_usuario_do_cartao esta vazio
-    if body.nome_do_usuario_do_cartao is not None:
-        usuario.nome_do_usuario_do_cartao = body.nome_do_usuario_do_cartao
-    # Verifica se no body o campo nome_cartao esta vazio
-    if body.nome_cartao is not None:
-        usuario.nome_cartao = body.nome_cartao
-    
+    # 🔐 Atualiza número do cartão
+    numero = body.cartao_credito or body.cartao_debito
+    numero_limpo = numero.replace(" ", "")
+
+    # ✅ Validação correta (ANTES de criptografar)
+    if not numero_limpo.isdigit() or not 13 <= len(numero_limpo) <= 19:
+        raise HTTPException(400, 'Número do cartão inválido')
+
+    # 🔑 Novo hash
+    hash_cartao = hashlib.sha256(numero_limpo.encode()).hexdigest()
+
+    # 🔍 Verifica duplicidade
+    cartao_existente = db.query(CartoesDB).filter(
+        CartoesDB.hash_cartao == hash_cartao,
+        CartoesDB.usuario_id == body.usuario_id,
+        CartoesDB.id != cartao_db.id  # evita conflito com ele mesmo
+    ).first()
+
+    if cartao_existente:
+        raise HTTPException(400, 'Não foi possível atualizar o cartão')
+
+    # 🔐 Criptografa
+    numero_criptografado = criptografar(numero_limpo)
+
+    if body.cartao_credito:
+        cartao_db.cartao_credito = numero_criptografado
+        cartao_db.cartao_debito = None
+    else:
+        cartao_db.cartao_debito = numero_criptografado
+        cartao_db.cartao_credito = None
+
+    # 💾 Atualiza dados auxiliares
+    cartao_db.hash_cartao = hash_cartao
+    cartao_db.ultimos_4 = numero_limpo[-4:]
+
+    # 📝 Outros campos opcionais
+    if body.data_validade_cartao:
+        cartao_db.data_validade_cartao = body.data_validade_cartao
+
+    if body.nome_do_usuario_do_cartao:
+        cartao_db.nome_do_usuario_do_cartao = body.nome_do_usuario_do_cartao
+
+    if body.nome_cartao:
+        cartao_db.nome_cartao = body.nome_cartao
+
     db.commit()
-    db.refresh(usuario)
+    db.refresh(cartao_db)
 
-    return {
-    "message": "Cartão atualizado com sucesso"
-    }
+    return {"message": "Cartão atualizado com sucesso"}
 
 # Altera o endereco do usuario
 @app.put('/site/alterar-endereco/{usuario_id}/{endereco_nomeado}')
@@ -998,3 +1124,5 @@ async def alterar_produto(
         redis_client.delete(key)
 
     return {'message':'Produto alterado com sucesso'}
+
+# Alterar senha 
