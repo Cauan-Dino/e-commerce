@@ -774,6 +774,9 @@ async def deletar_produto_carrinho(usuario_id: int, produto_id: int, db: Session
     db.commit()
 
     return {'message':f'Item deletado com sucesso'}
+
+# Exclui a conta do usuario
+@app.delete('/site/deletar/conta/{usuario_id}')
     
 
 # ===========
