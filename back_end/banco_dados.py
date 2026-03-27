@@ -10,8 +10,14 @@ load_dotenv(dotenv_path=".env")
 engine = create_engine(os.getenv('DATABASE_URL'),connect_args={'check_same_thread': False})
 SessionLocal = sessionmaker(autoflush=False,autocommit=False,bind=engine)
 Base = declarative_base()
-redis_client = redis.Redis(host='localhost',db=0,decode_responses=True,port=6379)
-redis_client2 = redis.Redis(host='localhost',db=1,decode_responses=True,port=6379)
+
+REDIS_HOST = os.getenv("REDIS_HOST","localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT","6379"))
+REDIS_DB_MAIN = int(os.getenv("REDIS_DB_MAIN",0))
+REDIS_DB_SECONDARY = int(os.getenv("REDIS_DB_SECONDARY",1))
+
+redis_client = redis.Redis(host=REDIS_HOST,db=REDIS_DB_MAIN,decode_responses=True,port=REDIS_PORT)
+redis_client2 = redis.Redis(host=REDIS_HOST,db=REDIS_DB_SECONDARY,decode_responses=True,port=REDIS_PORT)
 
 # Criacao das tabelas do banco de dados
 

@@ -1,4 +1,4 @@
-from fastapi import HTTPException,FastAPI,Depends,UploadFile,File,Form, Request
+from fastapi import HTTPException,FastAPI,Depends,UploadFile,File,Form, Request, BackgroundTasks
 from sqlalchemy.orm import Session
 from fastapi.security import HTTPBasic,HTTPBasicCredentials
 import os
@@ -14,6 +14,15 @@ import jwt
 from datetime import datetime, timedelta
 from authlib.integrations.starlette_client import OAuth
 from passlib.context import CryptContext
+from email_validator import validate_email, EmailNotValidError
+import jwt
+from fastapi.responses import FileResponse
+import smtplib
+from email.message import EmailMessage
+import jwt
+from datetime import datetime, timedelta
+
+
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
@@ -73,7 +82,8 @@ from banco_dados import (
 from body_models import (
     BODYUsuario, BODYCadastrarUsuario, BODYProdutosLoja, BODYCarrinhoUsuario,
     BODYCriarCarrinho, BODYEnderecoUsuario, BODYCartao, BODYConfirmarPagamento,
-    BODYCartaoPUT, BODYEnderecoUsuarioPUT, BODYProdutosLojaPUT
+    BODYCartaoPUT, BODYEnderecoUsuarioPUT, BODYProdutosLojaPUT,BODYRecuperarSenha,
+    BODYResetSenhaRequest
 )
 
 @app.get("/login/google")
@@ -132,6 +142,12 @@ def autorizacao(credenciais: HTTPBasicCredentials = Depends(security)):
 # =========
 # |  GET  |
 # =========
+
+# Carrega o front end de resetpassword
+@app.get("/reset-password")
+async def pagina_reset():
+    # Isso faz o navegador abrir o seu arquivo HTML
+    return FileResponse("reset-password.html")
 
 # Mostra todoso os usuarios cadastrados
 @app.get('/site/usuario')
@@ -678,6 +694,93 @@ async def cadastrar_site_usuario(body: BODYCadastrarUsuario, db: Session = Depen
 
     return {'message':'Cadastro realizado com sucesso'}
 
+# Altera a senha do usuario no banco de dados
+@app.post('/site/alterar-senha')
+async def alterar_senha(body: BODYResetSenhaRequest, db: Session = Depends(sessao_db)):
+    try:
+        # Decodificar o token para saber de quem é o e-mail
+        payload = jwt.decode(body.token, SECRET_KEY, algorithms=["HS256"])
+        email_usuario = payload.get("sub")
+
+        # Busca o usuario no banco de dados
+        usuario = db.query(UsuarioDB).filter(UsuarioDB.email == email_usuario).first()
+        if usuario is None:
+            raise HTTPException(
+                status_code=404,
+                detail='Usuário não encontrado'
+            )
+        
+        # Atualiza a senha utilizando hash para ficar criptografada no db
+        usuario.senha_usuario = pwd_context.hash(body.nova_senha)
+        db.commit()
+        db.refresh(usuario)
+        
+        return {"message": "Senha alterada com sucesso! Agora você pode fazer login."}
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=400, detail="O link expirou!")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=400, detail="Link inválido!")
+
+
+# Carrega as configurações do seu .env
+SECRET_KEY = os.getenv("SECRET_KEY")
+EMAIL_USER = os.getenv("EMAIL_USER")  # Seu e-mail 
+EMAIL_PASS = os.getenv("EMAIL_PASS")  # Sua senha
+SMTP_SERVER = os.getenv("SMTP_SERVER")        # Exemplo para Gmail
+SMTP_PORT = int(os.getenv("SMTP_PORT",465))
+
+# Envia o email para alterar a senha
+@app.post('/site/enviar-email')
+async def enviar_processo_recuperacao(body: BODYRecuperarSenha,background_tasks: BackgroundTasks,db: Session = Depends(sessao_db)):
+    # Verifica se o email existe
+    email = db.query(UsuarioDB).filter(UsuarioDB.email == body.email).first()
+    if email is None:
+        raise HTTPException(
+            status_code=404,
+            detail='Esse email não existe!'
+        )
+    
+    # 1. Gerar o Token
+    expiracao = datetime.utcnow() + timedelta(minutes=15)
+    payload = {"sub": body.email, "exp": expiracao}
+    token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+    # 2. Criar a Mensagem
+    msg = EmailMessage()
+    msg['Subject'] = "Recuperação de Senha"
+    msg['From'] = EMAIL_USER
+    msg['To'] = body.email
+    
+    link = f"https://seuecommerce.com.br/reset-password?token={token}"
+    conteudo_html = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: auto; border: 1px solid #ddd; padding: 20px; border-radius: 10px;">
+                <h2 style="color: #2563eb;">Recuperação de Senha</h2>
+                <p>Olá,</p>
+                <p>Recebemos uma solicitação para redefinir a senha da sua conta no <strong>Minha Loja API</strong>.</p>
+                <div style="text-align: center; margin: 30px 0;">
+                    <a href="{link}" style="background-color: #2563eb; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Redefinir Minha Senha</a>
+                </div>
+                <p style="font-size: 0.9em; color: #666;">O link acima expira em 15 minutos.</p>
+                <hr style="border: 0; border-top: 1px solid #eee;">
+                <p style="font-size: 0.8em; color: #999;">Caso não tenha sido você, por favor ignore este e-mail por segurança.</p>
+            </div>
+        </body>
+    </html>
+    """
+    
+    msg.add_alternative(conteudo_html, subtype='html')
+    def disparar_email(mensagem, server, port, user, password):
+        with smtplib.SMTP_SSL(server, port) as smtp:
+            smtp.login(user, password)
+            smtp.send_message(mensagem)
+
+    # Adicionamos a tarefa para rodar depois da resposta
+    background_tasks.add_task(disparar_email, msg, SMTP_SERVER, SMTP_PORT, EMAIL_USER, EMAIL_PASS)
+
+    return {"message": "Processo iniciado! Verifique seu e-mail em instantes."}
+
 # ===============
 # |    DELETE   |
 # ===============
@@ -947,5 +1050,3 @@ async def alterar_produto(
         redis_client.delete(key)
 
     return {'message':'Produto alterado com sucesso'}
-
-# Alterar senha 

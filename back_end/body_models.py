@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 
 # Criacao do body model
@@ -12,8 +12,8 @@ class BODYUsuario(BaseModel):
 class BODYCadastrarUsuario(BaseModel):
     nome_usuario: str
     email: EmailStr
-    senha_usuario: str
-    confirmar_senha: str
+    senha_usuario: str = Field(..., min_length=6)
+    confirmar_senha: str = Field(..., min_length=6)
 
 class BODYProdutosLoja(BaseModel):
     nome_produto: str
@@ -53,6 +53,12 @@ class BODYConfirmarPagamento(BaseModel):
     carrinho_id: int
     nome_cartao: str
 
+# BODY para resetar a senha
+class BODYResetSenhaRequest(BaseModel):
+    token: str
+    nova_senha: str = Field(..., min_length=6)
+    confirmar_senha: str = Field(..., min_length=6)
+
 # Basemodel PUT
 class BODYCartaoPUT(BaseModel):
     usuario_id: int
@@ -76,4 +82,8 @@ class BODYProdutosLojaPUT(BaseModel):
     nome_produto: Optional[str] = None
     preco_produto: Optional[float] = None
     categoria_produto: Optional[str] = None
+
+# BODYMODEL para recuperar a senha
+class BODYRecuperarSenha(BaseModel):
+    email: EmailStr
 
