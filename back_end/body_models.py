@@ -1,6 +1,8 @@
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 
+
+
 # Criacao do body model
 class BODYUsuario(BaseModel):
     email: EmailStr
@@ -21,16 +23,13 @@ class BODYProdutosLoja(BaseModel):
     categoria_produto: str
 
 class BODYCarrinhoUsuario(BaseModel):
-    carrinho_usuario_id: int
     carrinho_id: int
     produto_id: int
 
 class BODYCriarCarrinho(BaseModel):
     carrinho_id: int
-    usuario_id: int
 
 class BODYEnderecoUsuario(BaseModel):
-    usuario_id: int
     bairro: str
     numero: Optional[int] = None
     cidade: str
@@ -41,27 +40,30 @@ class BODYEnderecoUsuario(BaseModel):
 
 class BODYCartao(BaseModel):
     nome_cartao: str
-    usuario_id: int
     cartao_credito: Optional[str] = None
     cartao_debito: Optional[str] = None
     data_validade_cartao: str
     nome_do_usuario_do_cartao: str
 
 class BODYConfirmarPagamento(BaseModel):
-    usuario_id: int
     endereco_nomeado: str
     carrinho_id: int
     nome_cartao: str
 
+# BODY Para escolher o nome do endereco
+class BODYNomeEndereco(BaseModel):
+    endereco_nomeado: str
+
 # BODY para resetar a senha
 class BODYResetSenhaRequest(BaseModel):
-    token: str
     nova_senha: str = Field(..., min_length=6)
     confirmar_senha: str = Field(..., min_length=6)
 
+
+
+
 # Basemodel PUT
 class BODYCartaoPUT(BaseModel):
-    usuario_id: int
     nome_cartao: Optional[str] = None
     cartao_credito: Optional[str] = None
     cartao_debito: Optional[str] = None

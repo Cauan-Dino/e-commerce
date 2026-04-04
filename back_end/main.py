@@ -15,14 +15,14 @@ from datetime import datetime, timedelta
 from authlib.integrations.starlette_client import OAuth
 from passlib.context import CryptContext
 from email_validator import validate_email, EmailNotValidError
-import jwt
 from fastapi.responses import FileResponse
 import smtplib
 from email.message import EmailMessage
-import jwt
 from datetime import datetime, timedelta
+from jose import JWTError,jwt
+from auth_token import auth_router,criar_token_acesso,criar_token_refresh,verificar_token_access,verificar_token_refresh
 
-
+TEMPO_ACESSO_GOOGLE = int(os.getenv("TEMPO_ACESSO_GOOGLE"))
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
@@ -38,17 +38,10 @@ oauth.register(
     }
 )
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-
-def criar_token(usuario_id: int):
-    payload = {
-        "sub": str(usuario_id),
-        "exp": datetime.utcnow() + timedelta(hours=2)
-    }
-
-    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
-
 app = FastAPI()
+
+app.include_router(auth_router)
+
 security = HTTPBasic()
 
 # Chave criptografada
@@ -83,7 +76,7 @@ from body_models import (
     BODYUsuario, BODYCadastrarUsuario, BODYProdutosLoja, BODYCarrinhoUsuario,
     BODYCriarCarrinho, BODYEnderecoUsuario, BODYCartao, BODYConfirmarPagamento,
     BODYCartaoPUT, BODYEnderecoUsuarioPUT, BODYProdutosLojaPUT,BODYRecuperarSenha,
-    BODYResetSenhaRequest
+    BODYResetSenhaRequest,BODYNomeEndereco
 )
 
 @app.get("/login/google")
@@ -113,7 +106,7 @@ async def auth_google(request: Request, db: Session = Depends(sessao_db)):
         db.commit()
         db.refresh(usuario)
 
-    token_jwt = criar_token(usuario.usuario_id)
+    token_jwt = criar_token_acesso(usuario.email,timedelta(hours=TEMPO_ACESSO_GOOGLE),db)
 
     return {
         "message": "Login realizado com sucesso",
@@ -243,10 +236,10 @@ async def produtos_cadastrados(db: Session = Depends(sessao_db),produto_id:int =
     return paginacao
 
 # Mostra o carrinho do usuario
-@app.get('/site/carrinho/{usuario_id}')
-async def mostrar_carrinho(usuario_id: int,carrinho_id: int = None,db: Session = Depends(sessao_db)):
+@app.get('/site/carrinho/{carrinho_id}')
+async def mostrar_carrinho(carrinho_id: int = None,db: Session = Depends(sessao_db),usuario_token: UsuarioDB = Depends(verificar_token_access)):
     # Verifica se o usuario_id existe
-    usuario = db.query(UsuarioDB).filter(UsuarioDB.usuario_id==usuario_id).first()
+    usuario = db.query(UsuarioDB).filter(UsuarioDB.usuario_id== usuario_token.usuario_id).first()
     if usuario is None:
         raise HTTPException(
             status_code=404,
@@ -259,7 +252,7 @@ async def mostrar_carrinho(usuario_id: int,carrinho_id: int = None,db: Session =
         carrinho = carrinho.filter(CarrinhoUsuarioDB.carrinho_id == carrinho_id)
 
     # Verifica se ha algo adicionado no carrinho do usuario
-    carrinho_usuario = carrinho.filter(CarrinhoUsuarioDB.carrinho_usuario_id == usuario_id).all()
+    carrinho_usuario = carrinho.filter(CarrinhoUsuarioDB.carrinho_usuario_id == usuario_token.usuario_id).all()
     if not carrinho_usuario:  
         raise HTTPException(
             status_code=400,
@@ -320,10 +313,10 @@ async def mostrar_todo_redis(_:None = Depends(autorizacao)):
     return lista
 
 # Mostra os enderecos cadastrado do usuario
-@app.get('/site/endereco/{usuario_id}')
-async def mostrar_endereco(usuario_id: int,db: Session = Depends(sessao_db)):
+@app.get('/site/endereco')
+async def mostrar_endereco(db: Session = Depends(sessao_db),usuario_token: UsuarioDB = Depends(verificar_token_access)):
     # Chave do redis que mostra o endereco
-    key = f'endereco:{usuario_id}'
+    key = f'endereco:{usuario_token.usuario_id}'
     # Verifica se o redis existe
     redis = redis_client2.get(key)
     # Retorna o redis caso exista
@@ -331,7 +324,7 @@ async def mostrar_endereco(usuario_id: int,db: Session = Depends(sessao_db)):
         return {'enderecos':json.loads(redis),'ttl':redis_client2.ttl(key)}
     
     # Verifica se o usuario tem algum endereco cadastrado existe
-    endereco = db.query(EnderecoUsuarioDB).filter(EnderecoUsuarioDB.usuario_id == usuario_id).all()
+    endereco = db.query(EnderecoUsuarioDB).filter(EnderecoUsuarioDB.usuario_id == usuario_token.usuario_id).all()
     if not endereco:
         raise HTTPException(
             status_code=404,
@@ -352,7 +345,7 @@ async def mostrar_endereco(usuario_id: int,db: Session = Depends(sessao_db)):
             'cep': valor.cep
         })
 
-    redis_client2.setex(f'endereco:{usuario_id}',300,json.dumps(dicionario_redis))
+    redis_client2.setex(f'endereco:{usuario_token.usuario_id}',300,json.dumps(dicionario_redis))
 
     return {'enderecos':dicionario_redis}
 
@@ -413,21 +406,13 @@ async def adicionar_produto(
 
 # Adicionar produto no carrinho
 @app.post('/site/carrinho')
-async def adicionar_produto_carrinho(body: BODYCarrinhoUsuario, db: Session = Depends(sessao_db)):
+async def adicionar_produto_carrinho(body: BODYCarrinhoUsuario, db: Session = Depends(sessao_db),usuario_token: UsuarioDB = Depends(verificar_token_access)):
     # Verifica se o carrinho existe
-    existe_carrinho = db.query(CriarCarrinhoDB).filter(CriarCarrinhoDB.usuario_id == body.carrinho_usuario_id, CriarCarrinhoDB.carrinho_id == body.carrinho_id).first()
+    existe_carrinho = db.query(CriarCarrinhoDB).filter(CriarCarrinhoDB.usuario_id == usuario_token.usuario_id, CriarCarrinhoDB.carrinho_id == body.carrinho_id).first()
     if existe_carrinho is None:
         raise HTTPException(
             status_code=400,
             detail='Esse carrinho nao existe'
-        )
-
-    # Verifica se o usuario existe
-    usuario = db.query(UsuarioDB).filter(UsuarioDB.usuario_id == body.carrinho_usuario_id).first()
-    if usuario is None:
-        raise HTTPException(
-            status_code=404,
-            detail='Esse usuario nao existe'
         )
     
     # Verifica se o produto existe
@@ -439,7 +424,7 @@ async def adicionar_produto_carrinho(body: BODYCarrinhoUsuario, db: Session = De
         )
     
     # Adiciona o produto no carrinho
-    carrinho = CarrinhoUsuarioDB(**body.model_dump())
+    carrinho = CarrinhoUsuarioDB(**body.model_dump(),carrinho_usuario_id=usuario_token.usuario_id)
     db.add(carrinho)
     db.commit()
     db.refresh(carrinho)
@@ -449,25 +434,17 @@ async def adicionar_produto_carrinho(body: BODYCarrinhoUsuario, db: Session = De
 
 # Cria um carrinho
 @app.post('/site/criar/carrinho')
-async def criar_carrinho(body: BODYCriarCarrinho,db: Session = Depends(sessao_db)):
+async def criar_carrinho(body: BODYCriarCarrinho,db: Session = Depends(sessao_db),usuario_token: UsuarioDB = Depends(verificar_token_access)):
     # Verifica se o carrinho ja existe
-    carrinho = db.query(CriarCarrinhoDB).filter(CriarCarrinhoDB.usuario_id == body.usuario_id, CriarCarrinhoDB.carrinho_id == body.carrinho_id).first()
+    carrinho = db.query(CriarCarrinhoDB).filter(CriarCarrinhoDB.usuario_id == usuario_token.usuario_id, CriarCarrinhoDB.carrinho_id == body.carrinho_id).first()
     if carrinho:
         raise HTTPException(
             status_code=400,
             detail='Esse carrinho ja existe'
         )
-    
-    # Verifica se o usuario existe
-    usuario_db = db.query(UsuarioDB).filter(UsuarioDB.usuario_id == body.usuario_id).first()
-    if usuario_db is None:
-        raise HTTPException(
-            status_code=404,
-            detail='Esse usuario nao existe'
-        )
 
     # Cria um carrinho
-    criar_carrinho = CriarCarrinhoDB(**body.model_dump())
+    criar_carrinho = CriarCarrinhoDB(**body.model_dump(),usuario_id=usuario_token.usuario_id)
     db.add(criar_carrinho)
     db.commit()
     db.refresh(criar_carrinho)
@@ -476,25 +453,17 @@ async def criar_carrinho(body: BODYCriarCarrinho,db: Session = Depends(sessao_db
 
 # Adiciona um endereco da casa do usuario
 @app.post('/site/endereco')
-async def criar_endereco(body:BODYEnderecoUsuario ,db: Session = Depends(sessao_db)):
+async def criar_endereco(body:BODYEnderecoUsuario ,db: Session = Depends(sessao_db),usuario_token: UsuarioDB = Depends(verificar_token_access)):
     # Verifica se a quantidade de enderecos ultrapassou 3
-    quantidade_enderecos = db.query(EnderecoUsuarioDB).filter(EnderecoUsuarioDB.usuario_id == body.usuario_id).count()
+    quantidade_enderecos = db.query(EnderecoUsuarioDB).filter(EnderecoUsuarioDB.usuario_id == usuario_token.usuario_id).count()
     if quantidade_enderecos >= 10:
         raise HTTPException(
             status_code=400,
             detail='Voce ja atingiu o limite de enderecos cadastrados'
         )
     
-    # Verifica se o usuario existe
-    usuario = db.query(UsuarioDB).filter(UsuarioDB.usuario_id == body.usuario_id).first()
-    if usuario is None:
-        raise HTTPException(
-            status_code=404,
-            detail='Esse usuario nao existe'
-        )
-    
     # Verifica se o endereco ja existe
-    endereco = db.query(EnderecoUsuarioDB).filter(EnderecoUsuarioDB.usuario_id == body.usuario_id, EnderecoUsuarioDB.endereco_nomeado == body.endereco_nomeado).first()
+    endereco = db.query(EnderecoUsuarioDB).filter(EnderecoUsuarioDB.usuario_id == usuario_token.usuario_id, EnderecoUsuarioDB.endereco_nomeado == body.endereco_nomeado).first()
     if endereco:
         raise HTTPException(
             status_code=400,
@@ -502,7 +471,7 @@ async def criar_endereco(body:BODYEnderecoUsuario ,db: Session = Depends(sessao_
         )
     
     # Adiciona o endereco no banco de dados
-    adicionar_endereco = EnderecoUsuarioDB(**body.model_dump())
+    adicionar_endereco = EnderecoUsuarioDB(**body.model_dump(),usuario_id=usuario_token.usuario_id)
     db.add(adicionar_endereco)
     db.commit()
     db.refresh(adicionar_endereco)
@@ -510,26 +479,20 @@ async def criar_endereco(body:BODYEnderecoUsuario ,db: Session = Depends(sessao_
     # -------- Exclui todas as informacoes do redis no endereco --------
     
     # Verifica se tem algo adicionado no redis
-    valor = redis_client2.get(f'endereco:{body.usuario_id}')
+    valor = redis_client2.get(f'endereco:{usuario_token.usuario_id}')
     if valor:
-        redis_client2.delete(f'endereco:{body.usuario_id}')
+        redis_client2.delete(f'endereco:{usuario_token.usuario_id}')
 
 
     return adicionar_endereco
 
 # Adiciona a forma de pagamento
 @app.post('/site/pagamento', response_model=BODYCartao)
-async def adicionar_forma_pagamento(body: BODYCartao, db: Session = Depends(sessao_db)):
-
-    # Verifica se o usuário existe
-    usuario = db.query(UsuarioDB).filter(UsuarioDB.usuario_id == body.usuario_id).first()
-    if not usuario:
-        raise HTTPException(404, 'Esse usuário não existe')
-
+async def adicionar_forma_pagamento(body: BODYCartao, db: Session = Depends(sessao_db),usuario_token: UsuarioDB = Depends(verificar_token_access)):
     # Verifica nome duplicado
     if db.query(CartoesDB).filter(
         CartoesDB.nome_cartao == body.nome_cartao,
-        CartoesDB.usuario_id == body.usuario_id
+        CartoesDB.usuario_id == usuario_token.usuario_id
     ).first():
         raise HTTPException(400, 'Você já possui um cartão com esse nome')
 
@@ -551,7 +514,7 @@ async def adicionar_forma_pagamento(body: BODYCartao, db: Session = Depends(sess
     # Verifica duplicidade por usuário
     if db.query(CartoesDB).filter(
         CartoesDB.hash_cartao == hash_cartao,
-        CartoesDB.usuario_id == body.usuario_id
+        CartoesDB.usuario_id == usuario_token.usuario_id
     ).first():
         raise HTTPException(400, 'Não foi possível processar o cadastro do cartão')
 
@@ -561,7 +524,7 @@ async def adicionar_forma_pagamento(body: BODYCartao, db: Session = Depends(sess
 
     # Salva apenas hash e últimos 4
     novo_cartao = CartoesDB(
-        usuario_id=body.usuario_id,
+        usuario_id=usuario_token.usuario_id,
         nome_cartao=body.nome_cartao,
         hash_cartao=hash_cartao,
         cartao_credito=cartao_credito,
@@ -579,9 +542,9 @@ async def adicionar_forma_pagamento(body: BODYCartao, db: Session = Depends(sess
 
 # Finaliza o pagamento
 @app.post('/site/finalizar-compra')
-async def finalizar_compra(body: BODYConfirmarPagamento, db: Session = Depends(sessao_db)):
+async def finalizar_compra(body: BODYConfirmarPagamento, db: Session = Depends(sessao_db),usuario_token: UsuarioDB = Depends(verificar_token_access)):
     # Verifica se o usuario ja possui um endereco
-    endereco = db.query(EnderecoUsuarioDB).filter(EnderecoUsuarioDB.usuario_id == body.usuario_id,  EnderecoUsuarioDB.endereco_nomeado == body.endereco_nomeado).first()
+    endereco = db.query(EnderecoUsuarioDB).filter(EnderecoUsuarioDB.usuario_id == usuario_token.usuario_id,  EnderecoUsuarioDB.endereco_nomeado == body.endereco_nomeado).first()
     # Tratamento de erro caso nao exista o endereco
     if endereco is None:
         raise HTTPException(
@@ -590,7 +553,7 @@ async def finalizar_compra(body: BODYConfirmarPagamento, db: Session = Depends(s
         )
     
     # Verifica se a forma de pagamento existe
-    pagamento = db.query(CartoesDB).filter(CartoesDB.usuario_id == body.usuario_id,CartoesDB.nome_cartao == body.nome_cartao).first()
+    pagamento = db.query(CartoesDB).filter(CartoesDB.usuario_id == usuario_token.usuario_id,CartoesDB.nome_cartao == body.nome_cartao).first()
     if pagamento is None:
         raise HTTPException(
             status_code=404,
@@ -598,7 +561,7 @@ async def finalizar_compra(body: BODYConfirmarPagamento, db: Session = Depends(s
         )
 
     # Verifica se o carrinho existe
-    carrinho = db.query(CarrinhoUsuarioDB).filter(CarrinhoUsuarioDB.carrinho_id == body.carrinho_id, CarrinhoUsuarioDB.carrinho_usuario_id == body.usuario_id).all()
+    carrinho = db.query(CarrinhoUsuarioDB).filter(CarrinhoUsuarioDB.carrinho_id == body.carrinho_id, CarrinhoUsuarioDB.carrinho_usuario_id == usuario_token.usuario_id).all()
     if not carrinho:
         raise HTTPException(
             status_code=404,
@@ -616,15 +579,15 @@ async def finalizar_compra(body: BODYConfirmarPagamento, db: Session = Depends(s
         ]
 
     # Envia o produto para o endereco
-    envio = ConfirmarPagamentoDB(**body.model_dump())
+    envio = ConfirmarPagamentoDB(**body.model_dump(),usuario_id=usuario_token.usuario_id)
     
     db.add(envio)
     
     # Deleta o carrinho que o usuario escolheu
-    db.query(CarrinhoUsuarioDB).filter(CarrinhoUsuarioDB.carrinho_usuario_id == body.usuario_id, CarrinhoUsuarioDB.carrinho_id == body.carrinho_id).delete()
+    db.query(CarrinhoUsuarioDB).filter(CarrinhoUsuarioDB.carrinho_usuario_id == usuario_token.usuario_id, CarrinhoUsuarioDB.carrinho_id == body.carrinho_id).delete()
    
     # Deleta o carrinho em criar carrinho 
-    db.query(CriarCarrinhoDB).filter(CriarCarrinhoDB.usuario_id == body.usuario_id, CriarCarrinhoDB.carrinho_id == body.carrinho_id).delete()
+    db.query(CriarCarrinhoDB).filter(CriarCarrinhoDB.usuario_id == usuario_token.usuario_id, CriarCarrinhoDB.carrinho_id == body.carrinho_id).delete()
     db.commit()
     db.refresh(envio)
 
@@ -654,7 +617,14 @@ async def login_site_usuario(body: BODYUsuario, db: Session = Depends(sessao_db)
             detail='Senha ou email incorretos'
         )
     
-    return {"message": f"Login realizado com sucesso, bem-vindo {usuario.nome_usuario}!"}
+    access_token = criar_token_acesso(body.email,db=db)
+    refresh_token = criar_token_refresh(body.email,db=db)
+
+    return {
+        'access_token':access_token,
+        'refresh_token':refresh_token,
+        'type':'Bearer'
+    }
 
 
 # Cadastra no site pelo site
@@ -669,6 +639,13 @@ async def cadastrar_site_usuario(body: BODYCadastrarUsuario, db: Session = Depen
         raise HTTPException(
             status_code=400,
             detail='Você já possui esse email cadastrado.'
+        )
+
+    # Verifica se a senha eh menor de 6 caracteres
+    if len(body.senha_usuario) < 6:
+        raise HTTPException(
+            status_code=400,
+            detail='A senha precisa possuir mais de 6 caracteres'
         )
 
     # Verifica se senha e confirmar senha sao iguais
@@ -693,34 +670,6 @@ async def cadastrar_site_usuario(body: BODYCadastrarUsuario, db: Session = Depen
     db.refresh(adicionar)
 
     return {'message':'Cadastro realizado com sucesso'}
-
-# Altera a senha do usuario no banco de dados
-@app.post('/site/alterar-senha')
-async def alterar_senha(body: BODYResetSenhaRequest, db: Session = Depends(sessao_db)):
-    try:
-        # Decodificar o token para saber de quem é o e-mail
-        payload = jwt.decode(body.token, SECRET_KEY, algorithms=["HS256"])
-        email_usuario = payload.get("sub")
-
-        # Busca o usuario no banco de dados
-        usuario = db.query(UsuarioDB).filter(UsuarioDB.email == email_usuario).first()
-        if usuario is None:
-            raise HTTPException(
-                status_code=404,
-                detail='Usuário não encontrado'
-            )
-        
-        # Atualiza a senha utilizando hash para ficar criptografada no db
-        usuario.senha_usuario = pwd_context.hash(body.nova_senha)
-        db.commit()
-        db.refresh(usuario)
-        
-        return {"message": "Senha alterada com sucesso! Agora você pode fazer login."}
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=400, detail="O link expirou!")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=400, detail="Link inválido!")
-
 
 # Carrega as configurações do seu .env
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -803,56 +752,56 @@ async def deletar_redis():
     return {'message':'todo o redis foi deletado'}
 
 # Deleta um endereco do usuario
-@app.delete('/site/endereco/{usuario_id}/{endereco_nomeado}')
-async def deletar_endereco(usuario_id: int,endereco_nomeado: str, db: Session = Depends(sessao_db)):
+@app.delete('/site/endereco/{nome_endereco}')
+async def deletar_endereco(nome_endereco: str, db: Session = Depends(sessao_db),usuario_token: UsuarioDB = Depends(verificar_token_access)):
     # Verifica se o usuario existe e o endereco existem
-    verificacao = db.query(EnderecoUsuarioDB).filter(EnderecoUsuarioDB.usuario_id == usuario_id, EnderecoUsuarioDB.endereco_nomeado == endereco_nomeado).first()
+    verificacao = db.query(EnderecoUsuarioDB).filter(EnderecoUsuarioDB.usuario_id == usuario_token.usuario_id, EnderecoUsuarioDB.endereco_nomeado == nome_endereco).first()
     if verificacao is None:
         raise HTTPException(
             status_code=404,
-            detail='Usuario ou endereco nao existem'
+            detail='Esse endereço não existe!'
         )
     # Deleta o endereco
     db.delete(verificacao)
     db.commit()
 
     # Deleta o endereco no redis
-    key = redis_client2.get(f'endereco:{usuario_id}')
+    key = redis_client2.get(f'endereco:{usuario_token.usuario_id}')
     # Verifica se existe
     if key:
         # Trasforma em dicionario
         lista = json.loads(key)
         for i,v in enumerate(lista):
-            if v['endereco_nomeado'] == endereco_nomeado:
+            if v['endereco_nomeado'] == nome_endereco:
                 del lista[i]
         
-        redis_client2.setex(f'endereco:{usuario_id}',300,json.loads(lista))
+        redis_client2.setex(f'endereco:{usuario_token.usuario_id}',300,json.dumps(lista))
     
     return {'message':'Endereço deletado com sucesso!'}
 
 # Deletar carrinho
-@app.delete('/site/carrinho/{usuario_id}/{carrinho_id}')
-async def deletar_carrinho(usuario_id: int, carrinho_id: int, db: Session = Depends(sessao_db)):
+@app.delete('/site/carrinho/{carrinho_id}')
+async def deletar_carrinho(carrinho_id: int, db: Session = Depends(sessao_db),usuario_token: UsuarioDB = Depends(verificar_token_access)):
     # Verifica se o usuario possui esse carrinho
-    carrinho = db.query(CriarCarrinhoDB).filter(CriarCarrinhoDB.usuario_id == usuario_id, CriarCarrinhoDB.carrinho_id).first()
+    carrinho = db.query(CriarCarrinhoDB).filter(CriarCarrinhoDB.usuario_id == usuario_token.usuario_id, CriarCarrinhoDB.carrinho_id).first()
     if carrinho is None:
         raise HTTPException(
             status_code=404,
-            detail='Esse usuario nao possui esse carrinho'
+            detail='Esse usuário não possui esse carrinho!'
         )
     # Deleta o carrinho que esta no Banco de Dados CriarCarrinhoDB
     db.delete(carrinho)
     # Deleta o carrinho que esta em CarrinhoUsuarioDB
-    carrinho_usuario = db.query(CarrinhoUsuarioDB).filter(CarrinhoUsuarioDB.carrinho_usuario_id == usuario_id, CarrinhoUsuarioDB.carrinho_id == carrinho_id).delete()
+    carrinho_usuario = db.query(CarrinhoUsuarioDB).filter(CarrinhoUsuarioDB.carrinho_usuario_id == usuario_token.usuario_id, CarrinhoUsuarioDB.carrinho_id == carrinho_id).delete()
     db.commit()
 
     return {'message':f'Carrinho {carrinho_id} deletado com sucesso'}
 
 # Deleta um cartao cadastrado
-@app.delete('/site/cartoes/{usuario_id}/{nome_cartao}')
-async def deletar_cartao(usuario_id: int, nome_cartao:str, db: Session = Depends(sessao_db)):
+@app.delete('/site/cartoes/{nome_cartao}')
+async def deletar_cartao(nome_cartao:str, db: Session = Depends(sessao_db),usuario_token: UsuarioDB = Depends(verificar_token_access)):
     # Verifica se o cartao existe
-    cartao = db.query(CartoesDB).filter(CartoesDB.usuario_id == usuario_id, CartoesDB.nome_cartao == nome_cartao).first()
+    cartao = db.query(CartoesDB).filter(CartoesDB.usuario_id == usuario_token.usuario_id, CartoesDB.nome_cartao == nome_cartao).first()
     if cartao is None:
         raise HTTPException(
             status_code=404,
@@ -864,10 +813,10 @@ async def deletar_cartao(usuario_id: int, nome_cartao:str, db: Session = Depends
     return {'message':'Cartao excluido com sucesso'}
 
 # Deleta um item de um carrinho
-@app.delete('/site/carrinho-item/{usuario_id}/{produto_id}')
-async def deletar_produto_carrinho(usuario_id: int, produto_id: int, db: Session = Depends(sessao_db)):
+@app.delete('/site/carrinho-item/{carrinho_id}/{produto_id}')
+async def deletar_produto_carrinho(carrinho_id: int,produto_id: int, db: Session = Depends(sessao_db),usuario_token: UsuarioDB = Depends(verificar_token_access)):
     # Verifica se o item existe no carrinho do usuario
-    item_carrinho = db.query(CarrinhoUsuarioDB).filter(CarrinhoUsuarioDB.produto_id == produto_id, CarrinhoUsuarioDB.carrinho_usuario_id == usuario_id).first()
+    item_carrinho = db.query(CarrinhoUsuarioDB).filter(CarrinhoUsuarioDB.produto_id == produto_id, CarrinhoUsuarioDB.carrinho_usuario_id == usuario_token.usuario_id, CarrinhoUsuarioDB.carrinho_id == carrinho_id).first()
     if item_carrinho is None:
         raise HTTPException(
             status_code=404,
@@ -888,10 +837,10 @@ async def deletar_produto_carrinho(usuario_id: int, produto_id: int, db: Session
 
 # Altera o cartao ja cadastrado
 @app.put('/site/cartao/{nome_cartao}')
-async def alterar_cartao(nome_cartao: str, body: BODYCartaoPUT, db: Session = Depends(sessao_db)):
+async def alterar_cartao(nome_cartao: str, body: BODYCartaoPUT, db: Session = Depends(sessao_db),usuario_token: UsuarioDB = Depends(verificar_token_access)):
     
     cartao_db = db.query(CartoesDB).filter(
-        CartoesDB.usuario_id == body.usuario_id,
+        CartoesDB.usuario_id == usuario_token.usuario_id,
         CartoesDB.nome_cartao == nome_cartao
     ).first()
 
@@ -929,7 +878,7 @@ async def alterar_cartao(nome_cartao: str, body: BODYCartaoPUT, db: Session = De
     # 🔍 Verifica duplicidade
     cartao_existente = db.query(CartoesDB).filter(
         CartoesDB.hash_cartao == hash_cartao,
-        CartoesDB.usuario_id == body.usuario_id,
+        CartoesDB.usuario_id == usuario_token.usuario_id,
         CartoesDB.id != cartao_db.id  # evita conflito com ele mesmo
     ).first()
 
@@ -966,16 +915,16 @@ async def alterar_cartao(nome_cartao: str, body: BODYCartaoPUT, db: Session = De
     return {"message": "Cartão atualizado com sucesso"}
 
 # Altera o endereco do usuario
-@app.put('/site/alterar-endereco/{usuario_id}/{endereco_nomeado}')
+@app.put('/site/alterar-endereco/{endereco_nomeado}')
 async def alterar_endereco(
-    usuario_id: int, 
     endereco_nomeado: str, 
     body: BODYEnderecoUsuarioPUT, 
-    db: Session = Depends(sessao_db)
+    db: Session = Depends(sessao_db),
+    usuario_token: UsuarioDB = Depends(verificar_token_access)
     ):
     # Verifica se o usuario possui esse endereco
     endereco = db.query(EnderecoUsuarioDB).filter(
-        EnderecoUsuarioDB.usuario_id == usuario_id,
+        EnderecoUsuarioDB.usuario_id == usuario_token.usuario_id,
         EnderecoUsuarioDB.endereco_nomeado == endereco_nomeado
     ).first()
     if endereco is None:
@@ -1050,3 +999,45 @@ async def alterar_produto(
         redis_client.delete(key)
 
     return {'message':'Produto alterado com sucesso'}
+
+
+# Altera a senha do usuario no banco de dados
+@app.put('/site/alterar-senha')
+async def alterar_senha(body: BODYResetSenhaRequest, db: Session = Depends(sessao_db),usuario: UsuarioDB = Depends(verificar_token_access)):
+    # Verifica se a senhas sao iguais
+    if not secrets.compare_digest(body.nova_senha,body.confirmar_senha):
+        raise HTTPException(
+            status_code=400,
+            detail='As senhas devem ser iguais.'
+        )
+    # Vefifica se as senhas possem menos de 6 caracteres
+    if len(body.nova_senha) < 6 or len(body.confirmar_senha) < 6:
+        raise HTTPException(
+            status_code=400,
+            detail='A senha deve conter mais de 6 caracteres.'
+        )
+    
+    # Verifica se a senha eh igual a que esta salva atualmente
+    senha = pwd_context.verify(body.nova_senha,usuario.senha_usuario)
+    if senha:
+        raise HTTPException(
+            status_code=400,
+            detail='A senha não pode ser igual a senha atual.'
+        )
+    try:  
+        # Atualiza para o novo hash
+        usuario.senha_usuario = pwd_context.hash(body.nova_senha)
+        
+        db.add(usuario) # Garante que o objeto está na sessão
+        db.commit()
+        db.refresh(usuario)
+        
+        return {"message": "Senha alterada com sucesso!"}
+        
+    except Exception as e:
+        db.rollback() # Desfaz alterações em caso de erro no banco
+        raise HTTPException(status_code=500, detail=f"Erro interno ao salvar nova senha.")
+
+# COLOCAR O JWT OU USUARIO ID NO REDIS
+
+# PASSAR O NOME ENDERECO COMO UM NOVO BODY
