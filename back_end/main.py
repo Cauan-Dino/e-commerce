@@ -75,8 +75,8 @@ from banco_dados import (
 from body_models import (
     BODYUsuario, BODYCadastrarUsuario, BODYProdutosLoja, BODYCarrinhoUsuario,
     BODYCriarCarrinho, BODYEnderecoUsuario, BODYCartao, BODYConfirmarPagamento,
-    BODYCartaoPUT, BODYEnderecoUsuarioPUT, BODYProdutosLojaPUT,BODYRecuperarSenha,
-    BODYResetSenhaRequest,BODYNomeEndereco
+    BODYCartaoPUT, BODYEnderecoUsuarioPUT, BODYProdutosLojaPUT,
+    BODYResetSenhaRequest,BODYExcluirConta
 )
 
 @app.get("/login/google")
@@ -185,7 +185,7 @@ async def mostrar_usuarios(db: Session = Depends(sessao_db),page: int = 1,limit:
     
 # Mostra todos os produtos cadastrados
 @app.get('/site/produtos')
-async def produtos_cadastrados(db: Session = Depends(sessao_db),produto_id:int = None,categoria_produto: str = None,page: int = 1,nome_produto:str = None):
+async def produtos_cadastrados(db: Session = Depends(sessao_db),produto_id:int = None,categoria_produto: str = None,page: int = 1,nome_produto:str = None,usuario_token: UsuarioDB = Depends(verificar_token_access)):
     limit = 30
     if page < 1:
         raise HTTPException(
@@ -193,11 +193,10 @@ async def produtos_cadastrados(db: Session = Depends(sessao_db),produto_id:int =
             detail='A pagina nao pode ser menos que 1'
         )
     
-    key = f'produtos:page:{page}:limit:{limit}:categoria:{categoria_produto}:id:{produto_id}:nome_produto:{nome_produto}'
+    key = f'usuario:{usuario_token.usuario_id}:page:{page}:limit:{limit}:categoria:{categoria_produto}:id:{produto_id}:nome_produto:{nome_produto}'
 
     cache = redis_client.get(key)
     if cache:
-        
         return {'produtos':json.loads(cache),'ttl': redis_client.ttl(key)}
 
     produto = db.query(ProdutosLojaDB)
@@ -680,9 +679,9 @@ SMTP_PORT = int(os.getenv("SMTP_PORT",465))
 
 # Envia o email para alterar a senha
 @app.post('/site/enviar-email')
-async def enviar_processo_recuperacao(body: BODYRecuperarSenha,background_tasks: BackgroundTasks,db: Session = Depends(sessao_db)):
+async def enviar_processo_recuperacao(background_tasks: BackgroundTasks,usuario_token: UsuarioDB = Depends(verificar_token_access),db: Session = Depends(sessao_db)):
     # Verifica se o email existe
-    email = db.query(UsuarioDB).filter(UsuarioDB.email == body.email).first()
+    email = db.query(UsuarioDB).filter(UsuarioDB.email == usuario_token.email).first()
     if email is None:
         raise HTTPException(
             status_code=404,
@@ -691,16 +690,16 @@ async def enviar_processo_recuperacao(body: BODYRecuperarSenha,background_tasks:
     
     # 1. Gerar o Token
     expiracao = datetime.utcnow() + timedelta(minutes=15)
-    payload = {"sub": body.email, "exp": expiracao}
+    payload = {"sub": usuario_token.email, "exp": expiracao}
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
     # 2. Criar a Mensagem
     msg = EmailMessage()
     msg['Subject'] = "Recuperação de Senha"
     msg['From'] = EMAIL_USER
-    msg['To'] = body.email
+    msg['To'] = usuario_token.email
     
-    link = f"https://seuecommerce.com.br/reset-password?token={token}"
+    link = f"https://seuecommerce.com.br/site/alterar-senha?token={token}"
     conteudo_html = f"""
     <html>
         <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -828,8 +827,20 @@ async def deletar_produto_carrinho(carrinho_id: int,produto_id: int, db: Session
     return {'message':f'Item deletado com sucesso'}
 
 # Exclui a conta do usuario
-@app.delete('/site/deletar/conta/{usuario_id}')
-    
+@app.delete('/site/deletar/conta')
+async def excluir_usuario(body: BODYExcluirConta,db: Session = Depends(sessao_db),usuario_token: UsuarioDB = Depends(verificar_token_access)):
+    # Verifica se a senha do usuario 
+    senha = pwd_context.verify(body.senha,usuario_token.senha_usuario)
+    if not senha:
+        raise HTTPException(
+            status_code=401,
+            detail='Senha incorreta!'
+        )
+
+    db.query(UsuarioDB).filter(UsuarioDB.usuario_id == usuario_token.usuario_id).delete()
+    db.commit()
+
+    return {'message':'Usuário deletado com sucesso!'}
 
 # ===========
 # |   PUT   |

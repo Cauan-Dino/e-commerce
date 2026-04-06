@@ -59,8 +59,10 @@ class BODYResetSenhaRequest(BaseModel):
     nova_senha: str = Field(..., min_length=6)
     confirmar_senha: str = Field(..., min_length=6)
 
-
-
+# Body pra excluir a conta do usuario
+class BODYExcluirConta(BaseModel):
+    EmailStr: EmailStr
+    senha: str = Field(..., min_length=6)
 
 # Basemodel PUT
 class BODYCartaoPUT(BaseModel):
@@ -84,8 +86,4 @@ class BODYProdutosLojaPUT(BaseModel):
     nome_produto: Optional[str] = None
     preco_produto: Optional[float] = None
     categoria_produto: Optional[str] = None
-
-# BODYMODEL para recuperar a senha
-class BODYRecuperarSenha(BaseModel):
-    email: EmailStr
 
