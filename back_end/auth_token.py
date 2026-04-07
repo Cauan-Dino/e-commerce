@@ -42,6 +42,39 @@ def criar_token_acesso(email: EmailStr,time=timedelta(minutes=TEMPO_ACCESS),db: 
     token = jwt.encode(dict_info,SECRET_KEY,ALGORITHM)
     return token
 
+# Cria um token de acesso para usuarios logados pelo google
+def criar_token_acesso_google(usuario_id: int, time: timedelta = None):
+    if time is None:
+        time = timedelta(minutes=TEMPO_ACCESS)
+        
+    tempo_expiracao = datetime.now(timezone.utc) + time
+    
+    dict_info = {
+        'sub': str(usuario_id),
+        'exp': tempo_expiracao,
+        'type': 'access'
+    }
+    
+    token = jwt.encode(dict_info, SECRET_KEY, algorithm=ALGORITHM)
+    return token
+
+# Cria um refresh token para um usuario do google
+def criar_token_refresh_google(usuario_id: int, time: timedelta = None):
+    # Se não passar tempo, usa o padrão (ex: 7 dias)
+    if time is None:
+        time = timedelta(days=TEMPO_REFRESH)
+        
+    tempo_expiracao = datetime.now(timezone.utc) + time
+    
+    dict_info = {
+        'sub': str(usuario_id),
+        'exp': tempo_expiracao,
+        'type': 'refresh'
+    }
+    
+    token = jwt.encode(dict_info, SECRET_KEY, algorithm=ALGORITHM)
+    return token
+
 # Cria um token do tipo refresh
 def criar_token_refresh(email: EmailStr,time=timedelta(days=TEMPO_REFRESH),db: Session = Depends(sessao_db)):
     tempo = datetime.now(timezone.utc) + time

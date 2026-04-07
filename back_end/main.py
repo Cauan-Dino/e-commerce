@@ -21,8 +21,7 @@ from email.message import EmailMessage
 from datetime import datetime, timedelta
 from jose import JWTError,jwt
 from auth_token import auth_router,criar_token_acesso,criar_token_refresh,verificar_token_access,verificar_token_refresh
-
-TEMPO_ACESSO_GOOGLE = int(os.getenv("TEMPO_ACESSO_GOOGLE"))
+from auth_google import router
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
@@ -41,6 +40,7 @@ oauth.register(
 app = FastAPI()
 
 app.include_router(auth_router)
+app.include_router(router)
 
 security = HTTPBasic()
 
@@ -72,48 +72,13 @@ from banco_dados import (
     UsuarioDB, ProdutosLojaDB, CarrinhoUsuarioDB, CriarCarrinhoDB,
     EnderecoUsuarioDB, CartoesDB, ConfirmarPagamentoDB
 )
+
 from body_models import (
     BODYUsuario, BODYCadastrarUsuario, BODYProdutosLoja, BODYCarrinhoUsuario,
     BODYCriarCarrinho, BODYEnderecoUsuario, BODYCartao, BODYConfirmarPagamento,
     BODYCartaoPUT, BODYEnderecoUsuarioPUT, BODYProdutosLojaPUT,
     BODYResetSenhaRequest,BODYExcluirConta
 )
-
-@app.get("/login/google")
-async def login_google(request: Request):
-    redirect_uri = request.url_for("auth_google")
-    return await oauth.google.authorize_redirect(request, redirect_uri)
-
-@app.get("/auth/google")
-async def auth_google(request: Request, db: Session = Depends(sessao_db)):
-
-    token = await oauth.google.authorize_access_token(request)
-    user = token.get("userinfo")
-
-    google_id = user["sub"]
-
-    usuario = db.query(UsuarioDB).filter(
-        UsuarioDB.google_id == google_id
-    ).first()
-
-    if not usuario:
-        usuario = UsuarioDB(
-            google_id=google_id,
-            email=user["email"],
-            nome_usuario=user["name"]
-        )
-        db.add(usuario)
-        db.commit()
-        db.refresh(usuario)
-
-    token_jwt = criar_token_acesso(usuario.email,timedelta(hours=TEMPO_ACESSO_GOOGLE),db)
-
-    return {
-        "message": "Login realizado com sucesso",
-        "token": token_jwt,
-        "usuario": BODYUsuario.model_validate(usuario)
-    }
-
     
 # Autorizacao para adicionar um produto
 def autorizacao(credenciais: HTTPBasicCredentials = Depends(security)):
@@ -392,7 +357,7 @@ async def adicionar_produto(
     db.commit()
     
     # Exclui tudo que esta no redis
-    key = 'produtos:*'
+    key = 'usuario:*'
     keys = redis_client.keys(key)
     # For para excluir todas as chaves
     for key in keys:
@@ -605,10 +570,16 @@ async def login_site_usuario(body: BODYUsuario, db: Session = Depends(sessao_db)
     usuario = db.query(UsuarioDB).filter(UsuarioDB.email == body.email).first()
     if usuario is None:
         raise HTTPException(
-            status_code=404,
+            status_code=401,
             detail='Senha ou email incorretos'
         )
     
+    if usuario.senha_usuario is None:
+        raise HTTPException(
+            status_code=401,
+            detail='Esta conta foi criada via Google. Por favor, use o login social.'
+        )
+
     senha_valida = pwd_context.verify(body.senha_usuario, usuario.senha_usuario)
     if not senha_valida:
         raise HTTPException(
@@ -641,7 +612,7 @@ async def cadastrar_site_usuario(body: BODYCadastrarUsuario, db: Session = Depen
         )
 
     # Verifica se a senha eh menor de 6 caracteres
-    if len(body.senha_usuario) < 6:
+    if len(body.senha_usuario) < 6 or len(body.confirmar_senha) < 6:
         raise HTTPException(
             status_code=400,
             detail='A senha precisa possuir mais de 6 caracteres'
