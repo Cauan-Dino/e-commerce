@@ -54,6 +54,8 @@ class CarrinhoUsuarioDB(Base):
     carrinho_id: Mapped[int] = mapped_column(ForeignKey('criar_carrinho.carrinho_id',ondelete="CASCADE"),index=True)
     carrinho_usuario_id: Mapped[int] = mapped_column(ForeignKey('usuario.usuario_id'),index=True)
     produto_id: Mapped[int] = mapped_column(ForeignKey('produtos_loja.produto_id'),index=True)
+    quantidade_produto: Mapped[int] = mapped_column(index=True)
+    nome_produto: Mapped[str] = mapped_column(index=True)
 
     usuario = relationship('UsuarioDB', back_populates='carrinho')
     produto_no_carrinho = relationship('ProdutosLojaDB',back_populates='carrinho')

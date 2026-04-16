@@ -158,7 +158,7 @@ async def produtos_cadastrados(db: Session = Depends(sessao_db),produto_id:int =
             detail='A pagina nao pode ser menos que 1'
         )
     
-    key = f'usuario:{usuario_token.usuario_id}:page:{page}:limit:{limit}:categoria:{categoria_produto}:id:{produto_id}:nome_produto:{nome_produto}'
+    key = f'produtos:page:{page}:limit:{limit}:categoria:{categoria_produto}:id:{produto_id}:nome_produto:{nome_produto}'
 
     cache = redis_client.get(key)
     if cache:
@@ -227,7 +227,8 @@ async def mostrar_carrinho(carrinho_id: int = None,db: Session = Depends(sessao_
         {
             'nome_produto':valor.produto_no_carrinho.nome_produto,
             'preco_produto': valor.produto_no_carrinho.preco_produto,
-            'carrinho_id': valor.carrinho_id
+            'carrinho_id': valor.carrinho_id,
+            'quantidade': valor.quantidade_produto
         }
         for valor in carrinho_usuario
     ]
@@ -251,7 +252,7 @@ async def mostrar_carrinho(carrinho_id: int = None,db: Session = Depends(sessao_
         # Adiciona no dicionario lista
         lista[index]['produtos'].append(valor)
         # Adiciona a soma total de produtos de cada carrinho
-        lista[index]['soma_total'] += valor['preco_produto']
+        lista[index]['soma_total'] += valor['preco_produto'] * valor['quantidade']
     
     return lista
 
@@ -357,7 +358,7 @@ async def adicionar_produto(
     db.commit()
     
     # Exclui tudo que esta no redis
-    key = 'usuario:*'
+    key = 'produtos:*'
     keys = redis_client.keys(key)
     # For para excluir todas as chaves
     for key in keys:
@@ -376,7 +377,7 @@ async def adicionar_produto_carrinho(body: BODYCarrinhoUsuario, db: Session = De
     if existe_carrinho is None:
         raise HTTPException(
             status_code=400,
-            detail='Esse carrinho nao existe'
+            detail='Esse carrinho não existe!'
         )
     
     # Verifica se o produto existe
@@ -384,12 +385,29 @@ async def adicionar_produto_carrinho(body: BODYCarrinhoUsuario, db: Session = De
     if produto is None:
         raise HTTPException(
             status_code=404,
-            detail='Esse produto nao existe'
+            detail='Esse produto não existe!'
         )
     
-    # Adiciona o produto no carrinho
-    carrinho = CarrinhoUsuarioDB(**body.model_dump(),carrinho_usuario_id=usuario_token.usuario_id)
-    db.add(carrinho)
+    # Verifica se o produto ja ta no carrinho
+    carrinho = db.query(CarrinhoUsuarioDB).filter(
+        CarrinhoUsuarioDB.carrinho_usuario_id == usuario_token.usuario_id, 
+        CarrinhoUsuarioDB.carrinho_id == body.carrinho_id,
+        CarrinhoUsuarioDB.produto_id == body.produto_id
+        ).first()
+    
+    # Adiciona mais 1 de quantidade se o produto ja estiver no carrinho
+    if carrinho:
+        carrinho.quantidade_produto += 1
+    else:
+        # Adiciona o produto no carrinho
+        carrinho = CarrinhoUsuarioDB(
+            **body.model_dump(),
+            carrinho_usuario_id=usuario_token.usuario_id,
+            nome_produto=produto.nome_produto,
+            quantidade_produto=1
+            )
+        db.add(carrinho)    
+    
     db.commit()
     db.refresh(carrinho)
 
