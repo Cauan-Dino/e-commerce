@@ -18,7 +18,7 @@ router = APIRouter()
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
-# Carrega as configurações do seu .env
+# Carrega as configurações do .env
 SECRET_KEY = os.getenv("SECRET_KEY")
 EMAIL_USER = os.getenv("EMAIL_USER")  # Seu e-mail 
 EMAIL_PASS = os.getenv("EMAIL_PASS")  # Sua senha

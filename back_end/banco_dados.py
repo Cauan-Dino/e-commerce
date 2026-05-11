@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base, Mapped, mapped_column
 from sqlalchemy import create_engine, ForeignKey, String
 from dotenv import load_dotenv
 
-load_dotenv(dotenv_path=".env")
+load_dotenv(dotenv_path="env_test.env")
 
 # Criacao do banco de dados
 engine = create_engine(os.getenv('DATABASE_URL'),connect_args={'check_same_thread': False})
@@ -50,27 +50,14 @@ class CarrinhoUsuarioDB(Base):
     __tablename__ = 'carrinho'
     id: Mapped[int] = mapped_column(index=True,primary_key=True)
 
-    # Carrinho_id proviniente da tabela que CriarCarrinhoDB
-    carrinho_id: Mapped[int] = mapped_column(ForeignKey('criar_carrinho.carrinho_id',ondelete="CASCADE"),index=True)
-    carrinho_usuario_id: Mapped[int] = mapped_column(ForeignKey('usuario.usuario_id'),index=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey('usuario.usuario_id'),index=True)
+    nome_produto: Mapped[str] = mapped_column(index=True)
     produto_id: Mapped[int] = mapped_column(ForeignKey('produtos_loja.produto_id'),index=True)
     quantidade_produto: Mapped[int] = mapped_column(index=True)
-    nome_produto: Mapped[str] = mapped_column(index=True)
 
     usuario = relationship('UsuarioDB', back_populates='carrinho')
     produto_no_carrinho = relationship('ProdutosLojaDB',back_populates='carrinho')
-    criar_carrinho = relationship('CriarCarrinhoDB',back_populates='carrinho_usuario')
     confirmar_pagamento = relationship('ConfirmarPagamentoDB',back_populates='carrinho')
-
-# Tabela que cria o carrinho
-class CriarCarrinhoDB(Base):
-    __tablename__ = 'criar_carrinho'
-    id: Mapped[int] = mapped_column(index=True,primary_key=True)
-
-    carrinho_id: Mapped[int] = mapped_column(index=True)
-    usuario_id: Mapped[int] = mapped_column(ForeignKey('usuario.usuario_id'),index=True)
-
-    carrinho_usuario = relationship('CarrinhoUsuarioDB',back_populates='criar_carrinho')
 
 # Tabela do endereco do usuario
 class EnderecoUsuarioDB(Base):
@@ -107,10 +94,9 @@ class CartoesDB(Base):
 class ConfirmarPagamentoDB(Base):
     __tablename__ = 'confirmar_pagamento'
     id: Mapped[int] = mapped_column(index=True,primary_key=True)
-    usuario_id: Mapped[int] = mapped_column(index=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey('carrinho.usuario_id'),index=True)
     
     endereco_nomeado: Mapped[str] = mapped_column(ForeignKey('endereco_usuario.endereco_nomeado'),index=True)
-    carrinho_id: Mapped[int] = mapped_column(ForeignKey('carrinho.carrinho_id'),index=True)
     nome_cartao: Mapped[str] = mapped_column(ForeignKey('cartoes.nome_cartao'))
 
     endereco = relationship('EnderecoUsuarioDB',back_populates='confirmar_pagamento')

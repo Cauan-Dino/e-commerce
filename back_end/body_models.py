@@ -23,11 +23,7 @@ class BODYProdutosLoja(BaseModel):
     categoria_produto: str
 
 class BODYCarrinhoUsuario(BaseModel):
-    carrinho_id: int
     produto_id: int
-
-class BODYCriarCarrinho(BaseModel):
-    carrinho_id: int
 
 class BODYEnderecoUsuario(BaseModel):
     bairro: str
@@ -47,7 +43,6 @@ class BODYCartao(BaseModel):
 
 class BODYConfirmarPagamento(BaseModel):
     endereco_nomeado: str
-    carrinho_id: int
     nome_cartao: str
 
 # BODY Para escolher o nome do endereco

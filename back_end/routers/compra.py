@@ -2,7 +2,7 @@ import hashlib
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from banco_dados import sessao_db, EnderecoUsuarioDB, CartoesDB, CarrinhoUsuarioDB, ConfirmarPagamentoDB, CriarCarrinhoDB, UsuarioDB
+from banco_dados import sessao_db, EnderecoUsuarioDB, CartoesDB, CarrinhoUsuarioDB, ConfirmarPagamentoDB, UsuarioDB
 from auth_token import verificar_token_access
 from body_models import BODYCartao, BODYConfirmarPagamento, BODYCartaoPUT
 from routers.dependencias import criptografar
@@ -84,18 +84,19 @@ async def finalizar_compra(body: BODYConfirmarPagamento, db: Session = Depends(s
         )
 
     # Verifica se o carrinho existe
-    carrinho = db.query(CarrinhoUsuarioDB).filter(CarrinhoUsuarioDB.carrinho_id == body.carrinho_id, CarrinhoUsuarioDB.carrinho_usuario_id == usuario_token.usuario_id).all()
+    carrinho = db.query(CarrinhoUsuarioDB).filter(CarrinhoUsuarioDB.usuario_id == usuario_token.usuario_id).all()
     if not carrinho:
         raise HTTPException(
             status_code=404,
             detail='Adicione um carriho que exista'
         )
-    
+
     # Salva para ser usado como formtacao no return para atribuir preco,nome e categoria do produto
     produtos = [
             {
                 'preco': valor.produto_no_carrinho.preco_produto,
                 'nome_produto': valor.produto_no_carrinho.nome_produto,
+                'quantidade_produto': valor.quantidade_produto,
                 'categoria': valor.produto_no_carrinho.categoria_produto
             }
             for valor in carrinho
@@ -106,18 +107,16 @@ async def finalizar_compra(body: BODYConfirmarPagamento, db: Session = Depends(s
     
     db.add(envio)
     
-    # Deleta o carrinho que o usuario escolheu
-    db.query(CarrinhoUsuarioDB).filter(CarrinhoUsuarioDB.carrinho_usuario_id == usuario_token.usuario_id, CarrinhoUsuarioDB.carrinho_id == body.carrinho_id).delete()
+    # Deleta todos os produtos no carrinho do usuario
+    carrinho_delete = db.query(CarrinhoUsuarioDB).filter(CarrinhoUsuarioDB.usuario_id == usuario_token.usuario_id).delete()
    
     # Deleta o carrinho em criar carrinho 
-    db.query(CriarCarrinhoDB).filter(CriarCarrinhoDB.usuario_id == usuario_token.usuario_id, CriarCarrinhoDB.carrinho_id == body.carrinho_id).delete()
     db.commit()
     db.refresh(envio)
 
     return {
         'message': 'Envio realizado com sucesso.',
         'endereco': f'Endereço de envio: bairro:{envio.endereco.bairro},número: {envio.endereco.numero},estado: {envio.endereco.estado},cidade: {envio.endereco.cidade},cep: {envio.endereco.cep}',
-        'usuario': f'carrinho escolhido: {body.carrinho_id}',
         'Produtos enviados': produtos
     }
 
