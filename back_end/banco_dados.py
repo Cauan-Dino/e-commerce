@@ -1,5 +1,4 @@
 import os
-import redis
 from sqlalchemy.orm import sessionmaker, declarative_base, Mapped, mapped_column, relationship, Session
 from sqlalchemy import create_engine, ForeignKey, String
 from dotenv import load_dotenv
@@ -10,14 +9,6 @@ load_dotenv(dotenv_path="env_test.env")
 engine = create_engine(os.getenv('DATABASE_URL'),connect_args={'check_same_thread': False})
 SessionLocal = sessionmaker(autoflush=False,autocommit=False,bind=engine)
 Base = declarative_base()
-
-REDIS_HOST = os.getenv("REDIS_HOST","localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT","6379"))
-REDIS_DB_MAIN = int(os.getenv("REDIS_DB_MAIN",0))
-REDIS_DB_SECONDARY = int(os.getenv("REDIS_DB_SECONDARY",1))
-
-redis_client = redis.Redis(host=REDIS_HOST,db=REDIS_DB_MAIN,decode_responses=True,port=REDIS_PORT)
-redis_client2 = redis.Redis(host=REDIS_HOST,db=REDIS_DB_SECONDARY,decode_responses=True,port=REDIS_PORT)
 
 # Criacao das tabelas do banco de dados
 

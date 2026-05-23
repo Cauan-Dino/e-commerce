@@ -4,7 +4,8 @@ import shutil
 from fastapi import APIRouter, Depends, HTTPException, Form, UploadFile, File
 from sqlalchemy.orm import Session
 
-from banco_dados import sessao_db, redis_client, ProdutosLojaDB, UsuarioDB
+from banco_dados import sessao_db, ProdutosLojaDB, UsuarioDB
+from redis_config import redis_client
 from auth_token import verificar_token_access
 from body_models import BODYProdutosLojaPUT
 from routers.dependencias import autorizacao
@@ -13,7 +14,7 @@ router = APIRouter()
 
 # Mostra todos os produtos cadastrados
 @router.get('/site/produtos')
-async def produtos_cadastrados(db: Session = Depends(sessao_db), produto_id: int = None, categoria_produto: str = None, page: int = 1, nome_produto: str = None, usuario_token: UsuarioDB = Depends(verificar_token_access)):
+async def produtos_cadastrados(db: Session = Depends(sessao_db), produto_id: int = None, categoria_produto: str = None, page: int = 1, nome_produto: str = None):
     limit = 30
     if page < 1:
         raise HTTPException(

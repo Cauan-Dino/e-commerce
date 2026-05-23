@@ -7,7 +7,7 @@ from fastapi import Depends,APIRouter,HTTPException
 from jose import JWTError,jwt
 from fastapi.security import OAuth2PasswordBearer
 
-oauth_scheme = OAuth2PasswordBearer(tokenUrl='/site/login-usuario')
+oauth_scheme = OAuth2PasswordBearer(tokenUrl='login-form')
 
 auth_router = APIRouter(
     prefix='/auth',

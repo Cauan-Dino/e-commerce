@@ -13,6 +13,8 @@ from banco_dados import sessao_db, UsuarioDB
 from auth_token import verificar_token_access, criar_token_acesso, criar_token_refresh
 from body_models import BODYUsuario, BODYCadastrarUsuario, BODYResetSenhaRequest, BODYExcluirConta
 from routers.dependencias import autorizacao
+from kafka_configs.producer import enviar_tarefa
+from fastapi.security import OAuth2PasswordRequestForm
 
 router = APIRouter()
 
@@ -151,7 +153,7 @@ async def cadastrar_site_usuario(body: BODYCadastrarUsuario, db: Session = Depen
 
 # Envia o email para alterar a senha
 @router.post('/site/enviar-email')
-async def enviar_processo_recuperacao(background_tasks: BackgroundTasks, usuario_token: UsuarioDB = Depends(verificar_token_access), db: Session = Depends(sessao_db)):
+async def enviar_processo_recuperacao(usuario_token: UsuarioDB = Depends(verificar_token_access), db: Session = Depends(sessao_db)):
     # Verifica se o email existe
     email = db.query(UsuarioDB).filter(UsuarioDB.email == usuario_token.email).first()
     if email is None:
@@ -164,40 +166,15 @@ async def enviar_processo_recuperacao(background_tasks: BackgroundTasks, usuario
     expiracao = datetime.utcnow() + timedelta(minutes=15)
     payload = {"sub": usuario_token.email, "exp": expiracao}
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
-
-    # 2. Criar a Mensagem
-    msg = EmailMessage()
-    msg['Subject'] = "Recuperação de Senha"
-    msg['From'] = EMAIL_USER
-    msg['To'] = usuario_token.email
     
-    link = f"https://seuecommerce.com.br/site/alterar-senha?token={token}"
-    conteudo_html = f"""
-    <html>
-        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <div style="max-width: 600px; margin: auto; border: 1px solid #ddd; padding: 20px; border-radius: 10px;">
-                <h2 style="color: #2563eb;">Recuperação de Senha</h2>
-                <p>Olá,</p>
-                <p>Recebemos uma solicitação para redefinir a senha da sua conta no <strong>Minha Loja API</strong>.</p>
-                <div style="text-align: center; margin: 30px 0;">
-                    <a href="{link}" style="background-color: #2563eb; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Redefinir Minha Senha</a>
-                </div>
-                <p style="font-size: 0.9em; color: #666;">O link acima expira em 15 minutos.</p>
-                <hr style="border: 0; border-top: 1px solid #eee;">
-                <p style="font-size: 0.8em; color: #999;">Caso não tenha sido você, por favor ignore este e-mail por segurança.</p>
-            </div>
-        </body>
-    </html>
-    """
+    # Informacoes enviadas para o broker
+    dict_info = {
+        'token':token,
+        'email':usuario_token.email
+    }
     
-    msg.add_alternative(conteudo_html, subtype='html')
-    def disparar_email(mensagem, server, port, user, password):
-        with smtplib.SMTP_SSL(server, port) as smtp:
-            smtp.login(user, password)
-            smtp.send_message(mensagem)
-
-    # Adicionamos a tarefa para rodar depois da resposta
-    background_tasks.add_task(disparar_email, msg, SMTP_SERVER, SMTP_PORT, EMAIL_USER, EMAIL_PASS)
+    # Envia a tarefa para o producer
+    enviar_tarefa('enviar_email', dict_info)
 
     return {"message": "Processo iniciado! Verifique seu e-mail em instantes."}
 
@@ -253,3 +230,26 @@ async def excluir_usuario(body: BODYExcluirConta, db: Session = Depends(sessao_d
     db.commit()
 
     return {'message': 'Usuário deletado com sucesso!'}
+
+@router.post('/login-form')
+async def login_form(
+    formulario: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(sessao_db)
+    ):
+    # Verifica se o email existe
+    usuario = db.query(UsuarioDB).filter(UsuarioDB.email == formulario.username).first()
+    senha_verificada = pwd_context.verify(formulario.password, usuario.senha_usuario)
+    if not usuario or not senha_verificada:
+        raise HTTPException(
+            status_code=401,
+            detail='Senha ou email incorretos!'
+        )
+    
+    access_token = criar_token_acesso(email=usuario.email,db=db)
+    refresh_token = criar_token_refresh(email=usuario.email,db=db)
+
+    return {
+        "access_token": access_token,
+        "refresh_token":refresh_token,
+        "token_type": "Bearer"
+    }

@@ -20,7 +20,7 @@ app.add_middleware(
 )
 
 app.mount("/uploads", StaticFiles(directory="fotos_produtos"), name="fotos_produtos")
-app.mount("/front", StaticFiles(directory="../front_end"), name="front")
+app.mount("/front", StaticFiles(directory="/front_end"), name="front")
 
 app.include_router(auth_router)
 app.include_router(auth_google_router)

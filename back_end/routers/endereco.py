@@ -2,9 +2,10 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from banco_dados import sessao_db, redis_client2, EnderecoUsuarioDB, UsuarioDB
+from banco_dados import sessao_db, EnderecoUsuarioDB, UsuarioDB
 from auth_token import verificar_token_access
 from body_models import BODYEnderecoUsuario, BODYEnderecoUsuarioPUT
+from redis_config import redis_client
 
 router = APIRouter()
 
@@ -14,10 +15,10 @@ async def mostrar_endereco(db: Session = Depends(sessao_db), usuario_token: Usua
     # Chave do redis que mostra o endereco
     key = f'endereco:{usuario_token.usuario_id}'
     # Verifica se o redis existe
-    redis = redis_client2.get(key)
+    redis = redis_client.get(key)
     # Retorna o redis caso exista
     if redis:
-        return {'enderecos': json.loads(redis), 'ttl': redis_client2.ttl(key)}
+        return {'enderecos': json.loads(redis), 'ttl': redis_client.ttl(key)}
     
     # Verifica se o usuario tem algum endereco cadastrado existe
     endereco = db.query(EnderecoUsuarioDB).filter(EnderecoUsuarioDB.usuario_id == usuario_token.usuario_id).all()
@@ -41,7 +42,7 @@ async def mostrar_endereco(db: Session = Depends(sessao_db), usuario_token: Usua
             'cep': valor.cep
         })
 
-    redis_client2.setex(f'endereco:{usuario_token.usuario_id}', 300, json.dumps(dicionario_redis))
+    redis_client.setex(f'endereco:{usuario_token.usuario_id}', 300, json.dumps(dicionario_redis))
 
     return {'enderecos': dicionario_redis}
 
@@ -73,9 +74,9 @@ async def criar_endereco(body: BODYEnderecoUsuario, db: Session = Depends(sessao
     # -------- Exclui todas as informacoes do redis no endereco --------
     
     # Verifica se tem algo adicionado no redis
-    valor = redis_client2.get(f'endereco:{usuario_token.usuario_id}')
+    valor = redis_client.get(f'endereco:{usuario_token.usuario_id}')
     if valor:
-        redis_client2.delete(f'endereco:{usuario_token.usuario_id}')
+        redis_client.delete(f'endereco:{usuario_token.usuario_id}')
 
     return adicionar_endereco
 
@@ -94,7 +95,7 @@ async def deletar_endereco(nome_endereco: str, db: Session = Depends(sessao_db),
     db.commit()
 
     # Deleta o endereco no redis
-    key = redis_client2.get(f'endereco:{usuario_token.usuario_id}')
+    key = redis_client.get(f'endereco:{usuario_token.usuario_id}')
     # Verifica se existe
     if key:
         # Trasforma em dicionario
@@ -103,7 +104,7 @@ async def deletar_endereco(nome_endereco: str, db: Session = Depends(sessao_db),
             if v['endereco_nomeado'] == nome_endereco:
                 del lista[i]
         
-        redis_client2.setex(f'endereco:{usuario_token.usuario_id}', 300, json.dumps(lista))
+        redis_client.setex(f'endereco:{usuario_token.usuario_id}', 300, json.dumps(lista))
     
     return {'message': 'Endereço deletado com sucesso!'}
 
