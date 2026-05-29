@@ -26,7 +26,7 @@ def criar_token_acesso(email: EmailStr,time=timedelta(minutes=TEMPO_ACCESS),db: 
     tempo = datetime.now(timezone.utc) + time
     
     # Verifica se o email existe
-    usuario = db.query(UsuarioDB).filter(UsuarioDB.email == email).first()
+    usuario = db.query(UsuarioDB).filter(UsuarioDB.email == email, UsuarioDB.usuario_ativo == True).first()
     if not usuario:
         raise HTTPException(
             status_code=404,
@@ -80,7 +80,7 @@ def criar_token_refresh(email: EmailStr,time=timedelta(days=TEMPO_REFRESH),db: S
     tempo = datetime.now(timezone.utc) + time
     
     # Verifica se o email existe
-    usuario = db.query(UsuarioDB).filter(UsuarioDB.email == email).first()
+    usuario = db.query(UsuarioDB).filter(UsuarioDB.email == email, UsuarioDB.usuario_ativo == True).first()
     if not usuario:
         raise HTTPException(
             status_code=404,
@@ -114,7 +114,7 @@ def verificar_token_refresh(token: str = Depends(oauth_scheme),db: Session = Dep
             status_code=400,
             detail='O token precisa do tipo refresh'
         )
-    usuario = db.query(UsuarioDB).filter(UsuarioDB.usuario_id == usuario_id).first()
+    usuario = db.query(UsuarioDB).filter(UsuarioDB.usuario_id == usuario_id, UsuarioDB.usuario_ativo == True).first()
     if not usuario:
         raise HTTPException(
             status_code=404,
@@ -141,7 +141,7 @@ def verificar_token_access(token: str = Depends(oauth_scheme),db: Session = Depe
             detail='O token precisa ser do tipo access'
         )
     # Verifica se o usuario existe
-    usuario = db.query(UsuarioDB).filter(UsuarioDB.usuario_id == usuario_id).first()
+    usuario = db.query(UsuarioDB).filter(UsuarioDB.usuario_id == usuario_id,UsuarioDB.usuario_ativo == True).first()
     if not usuario:
         raise HTTPException(
             status_code=404,

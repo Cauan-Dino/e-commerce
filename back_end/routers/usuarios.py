@@ -1,17 +1,16 @@
 import os
+from pydantic import EmailStr
 import secrets
-import smtplib
-import jwt
-from datetime import datetime, timedelta
-from email.message import EmailMessage
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from jose import jwt,JWTError
+from datetime import datetime, timedelta, timezone
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 
 from banco_dados import sessao_db, UsuarioDB
 from auth_token import verificar_token_access, criar_token_acesso, criar_token_refresh
-from body_models import BODYUsuario, BODYCadastrarUsuario, BODYResetSenhaRequest, BODYExcluirConta
+from body_models import BODYUsuario, BODYCadastrarUsuario, BODYEnviarEmailParaExcluirConta,BODYResetSenhaRequest,BODYRecuperarSenha,BODYExcluirConta
 from routers.dependencias import autorizacao
 from kafka_configs.producer import enviar_tarefa
 from fastapi.security import OAuth2PasswordRequestForm
@@ -26,6 +25,7 @@ EMAIL_USER = os.getenv("EMAIL_USER")  # Seu e-mail
 EMAIL_PASS = os.getenv("EMAIL_PASS")  # Sua senha
 SMTP_SERVER = os.getenv("SMTP_SERVER")        # Exemplo para Gmail
 SMTP_PORT = int(os.getenv("SMTP_PORT", 465))
+SECRET_KEY_TOKEN = os.getenv("SECRET_KEY_TOKEN")
 
 # Carrega o front end de resetpassword
 @router.get("/reset-password")
@@ -33,9 +33,19 @@ async def pagina_reset():
     # Isso faz o navegador abrir o seu arquivo HTML
     return FileResponse("reset-password.html")
 
+
+
 # Mostra todos os usuarios cadastrados
 @router.get('/site/usuario')
-async def mostrar_usuarios(db: Session = Depends(sessao_db), page: int = 1, limit: int = 20, usuario_id: int = None, nome_usuario: str = None, _: None = Depends(autorizacao)):
+async def mostrar_usuarios(
+    db: Session = Depends(sessao_db), 
+    page: int = 1, 
+    usuario_id: int = None, 
+    nome_usuario: str = None,
+    _: None = Depends(autorizacao)
+    ):
+    limit = 20
+    
     # Tratamento de erro por pagina e limite
     if page < 1 or limit < 1:
         raise HTTPException(
@@ -74,11 +84,13 @@ async def mostrar_usuarios(db: Session = Depends(sessao_db), page: int = 1, limi
         'paginacao': paginacao
     }
 
+
+
 # Login no site pelo site
 @router.post('/site/login-usuario')
 async def login_site_usuario(body: BODYUsuario, db: Session = Depends(sessao_db)):
-    # Verifica se o usuario existe
-    usuario = db.query(UsuarioDB).filter(UsuarioDB.email == body.email).first()
+    # Verifica se o usuario existe e se estar ativo
+    usuario = db.query(UsuarioDB).filter(UsuarioDB.email == body.email, UsuarioDB.usuario_ativo == True).first()
     if usuario is None:
         raise HTTPException(
             status_code=401,
@@ -107,6 +119,9 @@ async def login_site_usuario(body: BODYUsuario, db: Session = Depends(sessao_db)
         'type': 'Bearer'
     }
 
+
+
+
 # Cadastra no site pelo site
 @router.post('/site/cadastro-usuario')
 async def cadastrar_site_usuario(body: BODYCadastrarUsuario, db: Session = Depends(sessao_db)):
@@ -115,10 +130,10 @@ async def cadastrar_site_usuario(body: BODYCadastrarUsuario, db: Session = Depen
         UsuarioDB.email == body.email
     ).first()
     
-    if usuario:
+    if usuario and usuario.usuario_ativo:
         raise HTTPException(
             status_code=400,
-            detail='Você já possui esse email cadastrado.'
+            detail='Esse email já existe.'
         )
 
     # Verifica se a senha eh menor de 6 caracteres
@@ -129,8 +144,7 @@ async def cadastrar_site_usuario(body: BODYCadastrarUsuario, db: Session = Depen
         )
 
     # Verifica se senha e confirmar senha sao iguais
-    senha = secrets.compare_digest(body.senha_usuario, body.confirmar_senha)
-    if not senha:
+    if body.senha_usuario != body.confirmar_senha:
         raise HTTPException(
             status_code=400,
             detail='As senhas devem ser iguais'
@@ -139,23 +153,31 @@ async def cadastrar_site_usuario(body: BODYCadastrarUsuario, db: Session = Depen
     hash_senha = pwd_context.hash(body.senha_usuario)
     
     # Adiciona no banco de dados
-    adicionar = UsuarioDB(
-        nome_usuario=body.nome_usuario,
-        senha_usuario=hash_senha,
-        email=body.email,
-    )
+    if usuario is None:
+        usuario = UsuarioDB(
+            nome_usuario=body.nome_usuario,
+            senha_usuario=hash_senha,
+            email=body.email,
+        )
     
-    db.add(adicionar)
+        db.add(usuario)
+    else:
+        usuario.nome_usuario = body.nome_usuario
+        usuario.senha_usuario = hash_senha
+        usuario.usuario_ativo = True
+    
     db.commit()
-    db.refresh(adicionar)
+    db.refresh(usuario)
 
     return {'message': 'Cadastro realizado com sucesso'}
 
+
+
 # Envia o email para alterar a senha
-@router.post('/site/enviar-email')
-async def enviar_processo_recuperacao(usuario_token: UsuarioDB = Depends(verificar_token_access), db: Session = Depends(sessao_db)):
+@router.post('/site/alterar-senha/enviar-email')
+async def enviar_processo_recuperacao(body: BODYRecuperarSenha, db: Session = Depends(sessao_db)):
     # Verifica se o email existe
-    email = db.query(UsuarioDB).filter(UsuarioDB.email == usuario_token.email).first()
+    email = db.query(UsuarioDB).filter(UsuarioDB.email == body.email, UsuarioDB.usuario_ativo == True).first()
     if email is None:
         raise HTTPException(
             status_code=404,
@@ -163,14 +185,14 @@ async def enviar_processo_recuperacao(usuario_token: UsuarioDB = Depends(verific
         )
     
     # 1. Gerar o Token
-    expiracao = datetime.utcnow() + timedelta(minutes=15)
-    payload = {"sub": usuario_token.email, "exp": expiracao}
+    expiracao = datetime.now(timezone.utc) + timedelta(minutes=15)
+    payload = {"sub": body.email, "exp": expiracao}
     token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
     
     # Informacoes enviadas para o broker
     dict_info = {
         'token':token,
-        'email':usuario_token.email
+        'email':body.email
     }
     
     # Envia a tarefa para o producer
@@ -178,9 +200,28 @@ async def enviar_processo_recuperacao(usuario_token: UsuarioDB = Depends(verific
 
     return {"message": "Processo iniciado! Verifique seu e-mail em instantes."}
 
+
+
 # Altera a senha do usuario no banco de dados
-@router.put('/site/alterar-senha')
-async def alterar_senha(body: BODYResetSenhaRequest, db: Session = Depends(sessao_db), usuario: UsuarioDB = Depends(verificar_token_access)):
+@router.patch('/site/alterar-senha')
+async def alterar_senha(body: BODYResetSenhaRequest, db: Session = Depends(sessao_db)):
+    try:
+        payload = jwt.decode(body.token,SECRET_KEY,algorithms=["HS256"])
+        email = payload.get('sub')
+    except JWTError:
+        raise HTTPException(
+            status_code=401,
+            detail='Token inválido!'
+        )
+    
+    # Pega as informacoes do usuario
+    usuario = db.query(UsuarioDB).filter(UsuarioDB.email == email, UsuarioDB.usuario_ativo == True).first()
+    if usuario is None:
+        raise HTTPException(
+            status_code=404,
+            detail='Esse email não existe!'
+        )
+
     # Verifica se a senhas sao iguais
     if not secrets.compare_digest(body.nova_senha, body.confirmar_senha):
         raise HTTPException(
@@ -188,7 +229,7 @@ async def alterar_senha(body: BODYResetSenhaRequest, db: Session = Depends(sessa
             detail='As senhas devem ser iguais.'
         )
     # Vefifica se as senhas possem menos de 6 caracteres
-    if len(body.nova_senha) < 6 or len(body.confirmar_senha) < 6:
+    if len(body.nova_senha) < 6:
         raise HTTPException(
             status_code=400,
             detail='A senha deve conter mais de 6 caracteres.'
@@ -215,29 +256,95 @@ async def alterar_senha(body: BODYResetSenhaRequest, db: Session = Depends(sessa
         db.rollback() # Desfaz alterações em caso de erro no banco
         raise HTTPException(status_code=500, detail=f"Erro interno ao salvar nova senha.")
 
-# Exclui a conta do usuario
-@router.delete('/site/deletar/conta')
-async def excluir_usuario(body: BODYExcluirConta, db: Session = Depends(sessao_db), usuario_token: UsuarioDB = Depends(verificar_token_access)):
-    # Verifica se a senha do usuario 
-    senha = pwd_context.verify(body.senha, usuario_token.senha_usuario)
-    if not senha:
+
+# Envia um email para que o usuari confime se quer excluir a conta
+@router.post('/site/deletar/conta')
+async def enviar_email_para_excluir_usuario(
+    body: BODYEnviarEmailParaExcluirConta,
+    usuario_token: UsuarioDB = Depends(verificar_token_access)
+    ):
+    # VALIDAÇÃO DO E-MAIL: Garante que o e-mail digitado pertence ao token logado
+    if body.email != usuario_token.email:
         raise HTTPException(
-            status_code=401,
-            detail='Senha incorreta!'
+            status_code=400,
+            detail='O e-mail informado não confere com o e-mail da conta logada.'
         )
 
-    db.query(UsuarioDB).filter(UsuarioDB.usuario_id == usuario_token.usuario_id).delete()
+    # VALIDAÇÃO DA SENHA (Apenas se o usuário tiver senha definida no banco)
+    if usuario_token.senha_usuario:
+        # Se ele tem senha no banco, ele obrigatoriamente precisa mandar a senha no body
+        if not body.senha:
+            raise HTTPException(
+                status_code=400,
+                detail='A senha é obrigatória para usuários com cadastro tradicional.'
+            )
+            
+        # Valida se a senha é a que esta cadastrada
+        senha_valida = pwd_context.verify(body.senha, usuario_token.senha_usuario)
+        if not senha_valida:
+            raise HTTPException(
+                status_code=401,
+                detail='Senha incorreta!'
+            )
+
+    # Gerar o Token
+    expiracao = datetime.now(timezone.utc) + timedelta(minutes=30)
+    payload = {"sub": body.email, "exp": expiracao}
+    token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+    # Informacoes enviadas para o broker
+    dict_info = {
+        'token':token,
+        'email': body.email
+    }
+
+    enviar_tarefa('enviar_email_para_excluir_conta',dict_info)
+
+    return {'message': 'Confirme a exclusão da sua conta no email.'}
+
+
+
+# Envia um email pro usuario confirmar a exclusao da conta dele
+@router.patch('/site/conta/desativar')
+async def enviar_email_para_excluir_usuario(
+    body: BODYExcluirConta,
+    db: Session = Depends(sessao_db),
+    ):
+    try:
+        payload = jwt.decode(body.token,SECRET_KEY,algorithms=['HS256'])
+        email = payload.get('sub')
+    except JWTError:
+        raise HTTPException(
+            status_code=401,
+            detail='Token inválido!'
+        )
+    
+    usuario = db.query(UsuarioDB).filter(UsuarioDB.email == email).first()
+    # Verifica se o email existe
+    if not usuario:
+        raise HTTPException(
+            status_code=404,
+            detail='Esse email não existe!'
+        )
+    
+    # Exclusao logica
+    usuario.usuario_ativo = False
+    
     db.commit()
+    db.refresh(usuario)
 
-    return {'message': 'Usuário deletado com sucesso!'}
+    return {'message':'Sua conta foi delatada com sucesso!'}
 
+
+
+# Login pelo fastapi forms
 @router.post('/login-form')
 async def login_form(
     formulario: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(sessao_db)
     ):
-    # Verifica se o email existe
-    usuario = db.query(UsuarioDB).filter(UsuarioDB.email == formulario.username).first()
+    # Verifica se o email existe e se o usuario estar ativo
+    usuario = db.query(UsuarioDB).filter(UsuarioDB.email == formulario.username,UsuarioDB.usuario_ativo == True).first()
     senha_verificada = pwd_context.verify(formulario.password, usuario.senha_usuario)
     if not usuario or not senha_verificada:
         raise HTTPException(

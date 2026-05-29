@@ -22,6 +22,7 @@ class UsuarioDB(Base):
     email: Mapped[str] = mapped_column(unique=True, index=True)
     google_id: Mapped[str] = mapped_column(unique=True, index=True, nullable=True)
     senha_usuario: Mapped[str] = mapped_column(nullable=True)
+    usuario_ativo: Mapped[bool] = mapped_column(nullable=True,default=True)
 
     carrinho = relationship('CarrinhoUsuarioDB', back_populates='usuario')
 

@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 
 from banco_dados import sessao_db, ProdutosLojaDB, UsuarioDB
 from redis_config import redis_client
-from auth_token import verificar_token_access
 from body_models import BODYProdutosLojaPUT
 from routers.dependencias import autorizacao
 

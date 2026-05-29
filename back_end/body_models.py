@@ -1,6 +1,5 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional
-
 
 
 # Criacao do body model
@@ -8,8 +7,7 @@ class BODYUsuario(BaseModel):
     email: EmailStr
     senha_usuario: Optional[str] = None
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class BODYCadastrarUsuario(BaseModel):
     nome_usuario: str
@@ -53,11 +51,15 @@ class BODYNomeEndereco(BaseModel):
 class BODYResetSenhaRequest(BaseModel):
     nova_senha: str = Field(..., min_length=6)
     confirmar_senha: str = Field(..., min_length=6)
+    token: str
 
-# Body pra excluir a conta do usuario
+# Body pra enviar o email para o usuario para que ele possa excluir a conta
+class BODYEnviarEmailParaExcluirConta(BaseModel):
+    email: EmailStr
+    senha: Optional[str] = None
+
 class BODYExcluirConta(BaseModel):
-    EmailStr: EmailStr
-    senha: str = Field(..., min_length=6)
+    token: str
 
 # Basemodel PUT
 class BODYCartaoPUT(BaseModel):
@@ -81,4 +83,7 @@ class BODYProdutosLojaPUT(BaseModel):
     nome_produto: Optional[str] = None
     preco_produto: Optional[float] = None
     categoria_produto: Optional[str] = None
+
+class BODYRecuperarSenha(BaseModel):
+    email: EmailStr
 

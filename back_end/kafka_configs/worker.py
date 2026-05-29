@@ -1,9 +1,11 @@
 from kafka_configs.consumer import consumers
 from kafka_configs.tasks.envia_email import enviar_email 
+from kafka_configs.tasks.enviar_email_para_excluir_conta import enviar_email_para_excluir_conta
 
 # Dicionario com as tarefas
 TAREFAS = {
-    'enviar_email': enviar_email
+    'enviar_email': enviar_email,
+    'enviar_email_para_excluir_conta':enviar_email_para_excluir_conta
 }
 
 for consumer in consumers:
