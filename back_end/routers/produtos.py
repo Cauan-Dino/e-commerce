@@ -89,6 +89,7 @@ async def adicionar_produto(
     nome_produto: str = Form(...),
     preco_produto: float = Form(...),
     categoria_produto: str = Form(...),
+    quantidade_disponivel: int = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(sessao_db),
     __: None = Depends(autorizacao)
@@ -114,6 +115,7 @@ async def adicionar_produto(
         nome_produto=nome_produto,
         preco_produto=preco_produto,
         categoria_produto=categoria_produto,
+        quantidade_disponivel=quantidade_disponivel,
         url_foto_produto=caminho_no_disco
     )
     
@@ -161,6 +163,9 @@ async def alterar_produto(
     # Verifica se o campo categoria esta preenchido
     if body.categoria_produto is not None:
         produto.categoria_produto = body.categoria_produto
+    # Verifica se o campo quantidade_produto esta preenchido
+    if body.quantidade_disponivel is not None:
+        produto.quantidade_disponivel = body.quantidade_disponivel
 
     db.commit()
     db.refresh(produto)

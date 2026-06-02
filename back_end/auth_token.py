@@ -21,6 +21,8 @@ ALGORITHM = os.getenv("ALGORITHM")
 TEMPO_ACCESS = int(os.getenv("TEMPO_ACCESS"))
 TEMPO_REFRESH = int(os.getenv("TEMPO_REFRESH"))
 
+
+
 # Cria token de acesso
 def criar_token_acesso(email: EmailStr,time=timedelta(minutes=TEMPO_ACCESS),db: Session = Depends(sessao_db)):
     tempo = datetime.now(timezone.utc) + time
@@ -33,6 +35,13 @@ def criar_token_acesso(email: EmailStr,time=timedelta(minutes=TEMPO_ACCESS),db: 
             detail='Esse email não existe'
         )
     
+    # Verifica se a conta do usuario esta ativa
+    if not usuario.usuario_ativo:
+        raise HTTPException(
+            status_code=403,
+            detail='Esta conta está desativada. Por favor, verifique seu e-mail ou contate o suporte.'
+        )
+
     # Cria o token
     dict_info = {
         'sub': str(usuario.usuario_id),
@@ -58,6 +67,8 @@ def criar_token_acesso_google(usuario_id: int, time: timedelta = None):
     token = jwt.encode(dict_info, SECRET_KEY, algorithm=ALGORITHM)
     return token
 
+
+
 # Cria um refresh token para um usuario do google
 def criar_token_refresh_google(usuario_id: int, time: timedelta = None):
     # Se não passar tempo, usa o padrão (ex: 7 dias)
@@ -75,6 +86,8 @@ def criar_token_refresh_google(usuario_id: int, time: timedelta = None):
     token = jwt.encode(dict_info, SECRET_KEY, algorithm=ALGORITHM)
     return token
 
+
+
 # Cria um token do tipo refresh
 def criar_token_refresh(email: EmailStr,time=timedelta(days=TEMPO_REFRESH),db: Session = Depends(sessao_db)):
     tempo = datetime.now(timezone.utc) + time
@@ -86,7 +99,13 @@ def criar_token_refresh(email: EmailStr,time=timedelta(days=TEMPO_REFRESH),db: S
             status_code=404,
             detail='Esse email não existe'
         )
-    
+    # Verifica se a conta do usuario esta ativa 
+    if not usuario.usuario_ativo:
+        raise HTTPException(
+            status_code=403,
+            detail='Esta conta está desativada. Por favor, verifique seu e-mail ou contate o suporte.'
+        )
+
     # Cria o token
     dict_info = {
         'sub':str(usuario.usuario_id),
@@ -95,6 +114,8 @@ def criar_token_refresh(email: EmailStr,time=timedelta(days=TEMPO_REFRESH),db: S
     }
     token = jwt.encode(dict_info,SECRET_KEY,ALGORITHM)
     return token
+
+
 
 # Verifica se o token do tipo refresh ainda ta valido
 def verificar_token_refresh(token: str = Depends(oauth_scheme),db: Session = Depends(sessao_db)):
@@ -114,13 +135,17 @@ def verificar_token_refresh(token: str = Depends(oauth_scheme),db: Session = Dep
             status_code=400,
             detail='O token precisa do tipo refresh'
         )
+    # Verifica se o usuario existe e se ele esta ativo
     usuario = db.query(UsuarioDB).filter(UsuarioDB.usuario_id == usuario_id, UsuarioDB.usuario_ativo == True).first()
     if not usuario:
         raise HTTPException(
             status_code=404,
             detail='Esse usuário não existe'
         )
+
     return usuario
+
+
 
 # Verifica o token do tipo access
 def verificar_token_access(token: str = Depends(oauth_scheme),db: Session = Depends(sessao_db)):
@@ -140,7 +165,7 @@ def verificar_token_access(token: str = Depends(oauth_scheme),db: Session = Depe
             status_code=400,
             detail='O token precisa ser do tipo access'
         )
-    # Verifica se o usuario existe
+    # Verifica se o usuario existe e se ele esta ativo
     usuario = db.query(UsuarioDB).filter(UsuarioDB.usuario_id == usuario_id,UsuarioDB.usuario_ativo == True).first()
     if not usuario:
         raise HTTPException(
@@ -148,6 +173,8 @@ def verificar_token_access(token: str = Depends(oauth_scheme),db: Session = Depe
             detail='Esse usúario não existe'
         )
     return usuario
+
+
 
 @auth_router.post('/refresh')
 async def refresh(usuario: UsuarioDB = Depends(verificar_token_refresh),db: Session = Depends(sessao_db)):

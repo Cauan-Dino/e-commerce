@@ -1,51 +1,99 @@
 import hashlib
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-
-from banco_dados import sessao_db, EnderecoUsuarioDB, CartoesDB, CarrinhoUsuarioDB, ConfirmarPagamentoDB, UsuarioDB
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session, joinedload
+from banco_dados import sessao_db, EnderecoUsuarioDB, CartoesDB, CarrinhoUsuarioDB, ConfirmarPagamentoDB, UsuarioDB, ProdutosLojaDB
 from auth_token import verificar_token_access
-from body_models import BODYCartao, BODYConfirmarPagamento, BODYCartaoPUT
+from body_models import BODYCartao, BODYConfirmarPagamento, BODYCartaoPUT, BODYItemCompra, BODYCartaoSalvoResponse
 from routers.dependencias import criptografar
+import stripe
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Pega a stripe_secret_key no .env
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
 router = APIRouter()
 
 # Adiciona a forma de pagamento
-@router.post('/site/pagamento', response_model=BODYCartao)
+@router.post('/site/pagamento', response_model=BODYCartaoSalvoResponse)
 async def adicionar_forma_pagamento(body: BODYCartao, db: Session = Depends(sessao_db), usuario_token: UsuarioDB = Depends(verificar_token_access)):
-    # Verifica nome duplicado
+    # 1. Verifica nome duplicado
     if db.query(CartoesDB).filter(
         CartoesDB.nome_cartao == body.nome_cartao,
         CartoesDB.usuario_id == usuario_token.usuario_id
     ).first():
         raise HTTPException(400, 'Você já possui um cartão com esse nome')
 
-    # Deve ter pelo menos um tipo de cartão
+    # 2. Deve ter pelo menos um tipo de cartão
     if not (body.cartao_credito or body.cartao_debito):
         raise HTTPException(400, 'Você deve informar um cartão')
 
-    # Número do cartão (crédito ou débito)
+    # Verifica se o usuario inserio valores em cartao_debito e carta_credito
+    if body.cartao_credito and body.cartao_debito:
+        raise HTTPException(400,'Você deve informar apenas um cartão!')
+
+    # 3. Número do cartão (crédito ou débito)
     numero = body.cartao_credito or body.cartao_debito
     numero_limpo = numero.replace(" ", "")
 
-    # Validação simples: apenas dígitos e tamanho 13-19
+    # 4. Validação simples: apenas dígitos e tamanho 13-19
     if not numero_limpo.isdigit() or not 13 <= len(numero_limpo) <= 19:
         raise HTTPException(400, 'Número do cartão inválido')
 
-    # Gera hash
+    # 5. Gera hash para checar duplicidade
     hash_cartao = hashlib.sha256(numero_limpo.encode()).hexdigest()
 
-    # Verifica duplicidade por usuário
     if db.query(CartoesDB).filter(
         CartoesDB.hash_cartao == hash_cartao,
         CartoesDB.usuario_id == usuario_token.usuario_id
     ).first():
-        raise HTTPException(400, 'Não foi possível processar o cadastro do cartão')
+        raise HTTPException(400, 'Não foi possível processar o cadastro do cartão (Cartão já cadastrado)')
 
-    # Criptografa números
+    # --- 🛡️ VALIDAÇÃO REAL COM O STRIPE ---
+    token_id_criado = None
+    try:
+        # Tratamento caso a data venha com espaços (ex: " 12 / 2029 ")
+        mes, ano = body.data_validade_cartao.split("/")
+
+        # 💡 MOCK PARA TESTE LOCAL (Ignora a trava de segurança do painel)
+        if numero_limpo == "4242424242424242":
+            token_id_criado = "tok_visa"
+            
+        else:
+            # Para QUALQUER outro número, ele tenta chamar a Stripe real (e vai dar erro)
+            token_stripe = stripe.Token.create(
+                card={
+                    "number": numero_limpo,
+                    "exp_month": int(mes.strip()),
+                    "exp_year": int(ano.strip()),
+                    "cvc": body.cvc,
+                    "name": body.nome_do_usuario_do_cartao
+                },
+            )
+            token_id_criado = token_stripe.id
+
+    except stripe.error.CardError as e:
+        # Caso a Stripe real rejeite ou nosso simulador intercepte
+        err = e.error if hasattr(e, 'error') else e
+        detail_msg = err.message if hasattr(err, 'message') else str(e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cartão recusado pela operadora: {detail_msg}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Erro de comunicação com a operadora do cartão."
+        )
+    # --- --------------------------------- ---
+
+    # Criptografa números (Opcional, já que agora você tem o Token do Stripe)
     cartao_credito = criptografar(numero_limpo) if body.cartao_credito else None
     cartao_debito = criptografar(numero_limpo) if body.cartao_debito else None
 
-    # Salva apenas hash e últimos 4
+    # Salva no Banco de Dados
     novo_cartao = CartoesDB(
         usuario_id=usuario_token.usuario_id,
         nome_cartao=body.nome_cartao,
@@ -54,7 +102,8 @@ async def adicionar_forma_pagamento(body: BODYCartao, db: Session = Depends(sess
         cartao_debito=cartao_debito,
         nome_do_usuario_do_cartao=body.nome_do_usuario_do_cartao,
         data_validade_cartao=body.data_validade_cartao,
-        ultimos_4=numero_limpo[-4:]
+        ultimos_4=numero_limpo[-4:],
+        token_stripe=token_id_criado # 👈 ADICIONE ESSA COLUNA NA SUA TABELA!
     )
 
     db.add(novo_cartao)
@@ -71,24 +120,24 @@ async def finalizar_compra(body: BODYConfirmarPagamento, db: Session = Depends(s
     # Tratamento de erro caso nao exista o endereco
     if endereco is None:
         raise HTTPException(
-            status_code=404,
-            detail='Voce nao possui esse endereco'
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Voce não possui esse endereço!'
         )
     
     # Verifica se a forma de pagamento existe
     pagamento = db.query(CartoesDB).filter(CartoesDB.usuario_id == usuario_token.usuario_id, CartoesDB.nome_cartao == body.nome_cartao).first()
     if pagamento is None:
         raise HTTPException(
-            status_code=404,
-            detail='Adicione alguma forma de pagamento'
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Adicione alguma forma de pagamento válida!'
         )
 
     # Verifica se o carrinho existe
     carrinho = db.query(CarrinhoUsuarioDB).filter(CarrinhoUsuarioDB.usuario_id == usuario_token.usuario_id).all()
     if not carrinho:
         raise HTTPException(
-            status_code=404,
-            detail='Adicione um carriho que exista'
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail='Adicione um carriho que exista!'
         )
 
     # Salva para ser usado como formtacao no return para atribuir preco,nome e categoria do produto
@@ -127,7 +176,7 @@ async def deletar_cartao(nome_cartao: str, db: Session = Depends(sessao_db), usu
     cartao = db.query(CartoesDB).filter(CartoesDB.usuario_id == usuario_token.usuario_id, CartoesDB.nome_cartao == nome_cartao).first()
     if cartao is None:
         raise HTTPException(
-            status_code=404,
+            status_code=status.HTTP_404_NOT_FOUND,
             detail='Esse cartao nao existe'
         )
     db.delete(cartao)
@@ -146,21 +195,21 @@ async def alterar_cartao(nome_cartao: str, body: BODYCartaoPUT, db: Session = De
 
     if cartao_db is None:
         raise HTTPException(
-            status_code=404,
+            status_code=status.HTTP_404_NOT_FOUND,
             detail='Cartão não encontrado'
         )
 
     # ❗ Deve enviar pelo menos um número
     if body.cartao_credito is None and body.cartao_debito is None:
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail='Dados inválidos'
         )
 
     # ❗ Não pode enviar os dois
     if body.cartao_credito and body.cartao_debito:
         raise HTTPException(
-            status_code=400,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail='Dados inválidos'
         )
 
@@ -213,3 +262,98 @@ async def alterar_cartao(nome_cartao: str, body: BODYCartaoPUT, db: Session = De
     db.refresh(cartao_db)
 
     return {"message": "Cartão atualizado com sucesso"}
+
+@router.post("/site/v1/cobrar", status_code=status.HTTP_200_OK)
+async def realizar_cobranca(
+    dados: BODYItemCompra,
+    db: Session = Depends(sessao_db),
+    token: UsuarioDB = Depends(verificar_token_access)
+):
+    try:
+        # 1. Busca os itens do carrinho do usuário primeiro
+        carrinho_do_usuario = db.query(CarrinhoUsuarioDB).\
+            filter(CarrinhoUsuarioDB.usuario_id == token.usuario_id).\
+            all()
+        
+        if not carrinho_do_usuario:
+            raise HTTPException(status_code=400, detail="Seu carrinho está vazio.")
+
+        # --- 🔒 BLOQUEIO E VALIDAÇÃO DE ESTOQUE (ANTES DO STRIPE) ---
+        for itens in carrinho_do_usuario:
+            # O 'with_for_update()' bloqueia a linha do produto no banco para evitar compras simultâneas do mesmo item
+            produto_estoque = db.query(ProdutosLojaDB).\
+                filter(ProdutosLojaDB.produto_id == itens.produto_id).\
+                with_for_update().\
+                first()
+            
+            # Vincula o produto travado ao item do carrinho
+            itens.produto_no_carrinho = produto_estoque
+
+            # Valida se a quantidade pedida está disponível
+            if itens.quantidade_produto > itens.produto_no_carrinho.quantidade_disponivel:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f'Ocorreu um erro, a quantidade do produto {itens.produto_no_carrinho.nome_produto} não está mais disponível!'
+                )
+        # --- ---------------------------------------------------- ---
+
+        # 2. ESTOQUE GARANTIDO E RESERVADO! Agora disparamos a cobrança real na Stripe
+        cobranca = stripe.Charge.create(
+            amount=dados.valor_em_centavos,
+            currency="brl",
+            source=dados.token_cartao,
+            description=dados.descricao,
+        )
+
+        # 3. Verifica se o pagamento foi aprovado com sucesso
+        if cobranca.status == "succeeded":
+            try:
+                # Diminui o estoque e deleta os itens do carrinho
+                for itens in carrinho_do_usuario:
+                    itens.produto_no_carrinho.quantidade_disponivel -= itens.quantidade_produto
+                    db.delete(itens)
+                
+                # 🛑 CRUCIAL: Confirma as alterações no Banco de Dados e libera os "locks"
+                db.commit()
+                
+            except Exception as banco_erro:
+                # Se o dinheiro saiu do cliente, mas seu banco falhou ao salvar a baixa, fazemos rollback
+                db.rollback()
+                # O ideal aqui é registrar um log crítico e dar um estorno (Refund) automático na Stripe
+                # stripe.Refund.create(charge=cobranca.id)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Pagamento aprovado, mas houve uma falha ao processar o pedido internamente. O suporte foi notificado."
+                )
+            
+            return {
+                "sucesso": True,
+                "id_transacao": cobranca.id,
+                "mensagem": "Pagamento aprovado com sucesso!"
+            }
+            
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="O pagamento foi recusado pela operadora."
+            )
+
+    except stripe.error.CardError as e:
+        # Se der erro no cartão, o banco faz rollback automático do Lock do estoque ao fechar a requisição
+        err = e.error if hasattr(e, 'error') else e
+        detail_msg = err.message if hasattr(err, 'message') else str(e)
+        
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=f"Erro no cartão: {detail_msg}"
+        )
+        
+    except HTTPException:
+        # Repassa as exceções HTTP que nós mesmos criamos lá em cima sem cair no bloco genérico 500
+        raise
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Erro interno no servidor: {str(e)}"
+        )

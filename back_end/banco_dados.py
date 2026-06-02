@@ -32,6 +32,7 @@ class ProdutosLojaDB(Base):
     produto_id: Mapped[int] = mapped_column(primary_key=True,index=True)
     nome_produto: Mapped[str] = mapped_column(index=True)
     preco_produto: Mapped[float] = mapped_column(index=True)
+    quantidade_disponivel: Mapped[int] = mapped_column()
     categoria_produto: Mapped[str] = mapped_column(index=True)
     url_foto_produto: Mapped[str] = mapped_column()
 
@@ -75,12 +76,13 @@ class CartoesDB(Base):
     
     usuario_id: Mapped[int] = mapped_column(index=True)
     nome_cartao: Mapped[str] = mapped_column(index=True)
-    hash_cartao: Mapped[str] = mapped_column(index=True,unique=True)    
+    hash_cartao: Mapped[str] = mapped_column(index=True)  
     cartao_credito: Mapped[str] = mapped_column(index=True, nullable=True)
     cartao_debito: Mapped[str] = mapped_column(index=True, nullable=True)
     nome_do_usuario_do_cartao: Mapped[str] = mapped_column(index=True)
     data_validade_cartao: Mapped[str] = mapped_column(index=True)
     ultimos_4: Mapped[str] = mapped_column(String(4))
+    token_stripe: Mapped[str] = mapped_column(index=True, nullable=True)
 
 # Tabela que confirma o pagemnto
 class ConfirmarPagamentoDB(Base):
