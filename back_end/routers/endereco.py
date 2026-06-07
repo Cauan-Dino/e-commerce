@@ -7,7 +7,7 @@ from auth_token import verificar_token_access
 from body_models import BODYEnderecoUsuario, BODYEnderecoUsuarioPUT
 from redis_config import redis_client
 
-router = APIRouter()
+router = APIRouter(tags=['Endereço'])
 
 # Mostra os enderecos cadastrado do usuario
 @router.get('/site/endereco')

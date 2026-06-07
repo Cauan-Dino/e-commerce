@@ -46,7 +46,7 @@ class BODYCartao(BaseModel):
     cvc: str  # Enviado apenas na entrada
     nome_do_usuario_do_cartao: str
 
-# 🆕 ESSE SERÁ O DE SAÍDA (Sem cvc e expondo apenas dados seguros)
+# ESSE SERÁ O DE SAÍDA (Sem cvc e expondo apenas dados seguros)
 class BODYCartaoSalvoResponse(BaseModel):
     id: int
     nome_cartao: str

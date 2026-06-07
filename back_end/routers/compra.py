@@ -1,7 +1,7 @@
 import hashlib
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
-from banco_dados import sessao_db, EnderecoUsuarioDB, CartoesDB, CarrinhoUsuarioDB, ConfirmarPagamentoDB, UsuarioDB, ProdutosLojaDB
+from banco_dados import sessao_db, EnderecoUsuarioDB, CartoesDB, CarrinhoUsuarioDB, ConfirmarPagamentoDB, UsuarioDB, ProdutosLojaDB, PedidoDB, ItensPedidoDB
 from auth_token import verificar_token_access
 from body_models import BODYCartao, BODYConfirmarPagamento, BODYCartaoPUT, BODYItemCompra, BODYCartaoSalvoResponse
 from routers.dependencias import criptografar
@@ -14,7 +14,7 @@ load_dotenv()
 # Pega a stripe_secret_key no .env
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 
-router = APIRouter()
+router = APIRouter(tags=['Compra na loja'])
 
 # Adiciona a forma de pagamento
 @router.post('/site/pagamento', response_model=BODYCartaoSalvoResponse)
@@ -265,7 +265,7 @@ async def alterar_cartao(nome_cartao: str, body: BODYCartaoPUT, db: Session = De
 
 @router.post("/site/v1/cobrar", status_code=status.HTTP_200_OK)
 async def realizar_cobranca(
-    dados: BODYItemCompra,
+    body: BODYItemCompra,
     db: Session = Depends(sessao_db),
     token: UsuarioDB = Depends(verificar_token_access)
 ):
@@ -276,45 +276,83 @@ async def realizar_cobranca(
             all()
         
         if not carrinho_do_usuario:
-            raise HTTPException(status_code=400, detail="Seu carrinho está vazio.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Seu carrinho está vazio.")
 
         # --- 🔒 BLOQUEIO E VALIDAÇÃO DE ESTOQUE (ANTES DO STRIPE) ---
+        # Calcular o total real no backend de forma ultra rápida
+        total_calculado_centavos = 0
         for itens in carrinho_do_usuario:
+            
             # O 'with_for_update()' bloqueia a linha do produto no banco para evitar compras simultâneas do mesmo item
             produto_estoque = db.query(ProdutosLojaDB).\
                 filter(ProdutosLojaDB.produto_id == itens.produto_id).\
                 with_for_update().\
                 first()
             
+            # Segurança caso o produto tenha sido deletado do catálogo
+            if not produto_estoque:
+                raise HTTPException(
+                    status_code=404, 
+                    detail="Um dos produtos no seu carrinho não está mais disponível na nossa loja."
+                )
+            
             # Vincula o produto travado ao item do carrinho
             itens.produto_no_carrinho = produto_estoque
-
+            # Preco de todos os itens que estao no carrinho
+            total_calculado_centavos += int((itens.produto_no_carrinho.preco_produto * itens.quantidade_produto) * 100)
             # Valida se a quantidade pedida está disponível
             if itens.quantidade_produto > itens.produto_no_carrinho.quantidade_disponivel:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f'Ocorreu um erro, a quantidade do produto {itens.produto_no_carrinho.nome_produto} não está mais disponível!'
                 )
+        
+        # Valida se o valor do body bate com o cálculo real do backend
+        if body.valor_em_centavos != total_calculado_centavos:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="O valor total dos produtos mudou ou foi adulterado. Por favor, atualize o carrinho."
+            )
+        
         # --- ---------------------------------------------------- ---
 
         # 2. ESTOQUE GARANTIDO E RESERVADO! Agora disparamos a cobrança real na Stripe
         cobranca = stripe.Charge.create(
-            amount=dados.valor_em_centavos,
+            amount=body.valor_em_centavos,
             currency="brl",
-            source=dados.token_cartao,
-            description=dados.descricao,
+            source=body.token_cartao,
+            description=body.descricao,
         )
-
+        
         # 3. Verifica se o pagamento foi aprovado com sucesso
         if cobranca.status == "succeeded":
+            
             try:
+                # Adiciona informacoes na tabela PedidoDB
+                info_pedido = PedidoDB(
+                usuario_id=token.usuario_id,
+                total_centavos = total_calculado_centavos,
+                status_pedido='Pago',
+                stripe_charge_id=cobranca.id
+                )
+                
+                db.add(info_pedido)
+                db.flush()
                 # Diminui o estoque e deleta os itens do carrinho
                 for itens in carrinho_do_usuario:
                     itens.produto_no_carrinho.quantidade_disponivel -= itens.quantidade_produto
+                    # Adiciona os produtos pedidos na tabela ItensPedidoDB
+                    produtos_pedidos = ItensPedidoDB(
+                        pedido_id=info_pedido.id,
+                        produto_id=itens.produto_id,
+                        quantidade=itens.quantidade_produto,
+                        preco_unitario_centavos=int(itens.produto_no_carrinho.preco_produto * 100)
+                    )
+                    db.add(produtos_pedidos)
                     db.delete(itens)
                 
-                # 🛑 CRUCIAL: Confirma as alterações no Banco de Dados e libera os "locks"
                 db.commit()
+
                 
             except Exception as banco_erro:
                 # Se o dinheiro saiu do cliente, mas seu banco falhou ao salvar a baixa, fazemos rollback
@@ -326,6 +364,7 @@ async def realizar_cobranca(
                     detail="Pagamento aprovado, mas houve uma falha ao processar o pedido internamente. O suporte foi notificado."
                 )
             
+
             return {
                 "sucesso": True,
                 "id_transacao": cobranca.id,
@@ -357,3 +396,5 @@ async def realizar_cobranca(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Erro interno no servidor: {str(e)}"
         )
+    
+

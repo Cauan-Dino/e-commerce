@@ -29,3 +29,13 @@ app.include_router(usuarios_router)
 app.include_router(endereco_router)
 app.include_router(compra_router)
 app.include_router(produtos_router)
+
+# Adicionar uma tabela que cadastra os pedidos dos usuarios
+# Adicionar uma tabela que cadastra os pedidos dos usuarios
+# Adicionar uma tabela que cadastra os pedidos dos usuarios
+# Adicionar uma tabela que cadastra os pedidos dos usuarios
+# Adicionar uma tabela que cadastra os pedidos dos usuarios
+# Adicionar uma tabela que cadastra os pedidos dos usuarios
+# Adicionar uma tabela que cadastra os pedidos dos usuarios
+# Adicionar uma tabela que cadastra os pedidos dos usuarios
+# Adicionar uma tabela que cadastra os pedidos dos usuarios

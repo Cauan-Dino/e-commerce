@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from banco_dados import sessao_db, CarrinhoUsuarioDB, ProdutosLojaDB, UsuarioDB
 from auth_token import verificar_token_access
 from body_models import BODYCarrinhoUsuario
 
-router = APIRouter()
+router = APIRouter(tags=['Carrinho'])
 
 # Mostra o carrinho do usuario
 @router.get('/site/carrinho')
@@ -56,6 +56,14 @@ async def adicionar_produto_carrinho(body: BODYCarrinhoUsuario, db: Session = De
         raise HTTPException(
             status_code=404,
             detail='Esse produto não existe!'
+        )
+    
+    # Verifica se o produto esta disponivel no estoque
+    estoque = db.query(ProdutosLojaDB).filter(ProdutosLojaDB.quantidade_disponivel > 0,ProdutosLojaDB.produto_id == body.produto_id).first()
+    if estoque is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='Esse produto não está disponível no estoque!'
         )
     
     # Verifica se o produto ja ta no carrinho

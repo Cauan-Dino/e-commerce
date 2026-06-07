@@ -9,7 +9,7 @@ from redis_config import redis_client
 from body_models import BODYProdutosLojaPUT
 from routers.dependencias import autorizacao
 
-router = APIRouter()
+router = APIRouter(tags=['Produtos'])
 
 # Mostra todos os produtos cadastrados
 @router.get('/site/produtos')

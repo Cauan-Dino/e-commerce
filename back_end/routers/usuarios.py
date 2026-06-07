@@ -15,7 +15,7 @@ from routers.dependencias import autorizacao
 from kafka_configs.producer import enviar_tarefa
 from fastapi.security import OAuth2PasswordRequestForm
 
-router = APIRouter()
+router = APIRouter(tags=['Clientes'])
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
