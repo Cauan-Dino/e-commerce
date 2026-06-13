@@ -7,7 +7,7 @@ from sqlalchemy import or_
 import os
 from datetime import timedelta
 from dotenv import load_dotenv
-from auth_token import criar_token_acesso_google, criar_token_refresh_google
+from auth_token import criar_token_acesso,criar_token_refresh
 
 load_dotenv()
 
@@ -66,18 +66,28 @@ async def auth_google(code: str, db: Session = Depends(sessao_db)):
         or_(UsuarioDB.google_id == google_id, UsuarioDB.email == email_google)
     ).first()
 
+    # Validação: Se o usuário já existe, mas está inativo, barra o login imediatamente
+    if usuario and not usuario.usuario_ativo:
+        raise HTTPException(
+            status_code=403, 
+            detail="Esta conta de usuário está inativa. Entre em contato com o suporte."
+        )
+
     try:
+        # Se não existe, cria um novo (garanta que o padrão de 'usuario_ativo' seja True no seu Model ou defina aqui)
         if not usuario:
             usuario = UsuarioDB(
                 nome_usuario=user_info.get("name"),
                 email=email_google,
                 google_id=google_id,
                 senha_usuario=None,
+                usuario_ativo=True
             )
             db.add(usuario)
             db.commit()
             db.refresh(usuario)
         else:
+            # Se existe e tem o google_id vazio (ex: conta criada via formulário antes), vincula o ID do Google
             if usuario.google_id is None:
                 usuario.google_id = google_id
                 db.commit()
@@ -88,8 +98,8 @@ async def auth_google(code: str, db: Session = Depends(sessao_db)):
 
     # 4. Geração dos seus Tokens internos
     # Passamos o tempo específico do Google se desejar
-    meu_access_token = criar_token_acesso_google(usuario_id=usuario.usuario_id, time=TEMPO_ACESSO_GOOGLE)
-    meu_refresh_token = criar_token_refresh_google(usuario_id=usuario.usuario_id)
+    meu_access_token = criar_token_acesso(email=usuario.email, time=TEMPO_ACESSO_GOOGLE, db=db)
+    meu_refresh_token = criar_token_refresh(email=usuario.email, db=db)
     
     return {
         "access_token": meu_access_token, 
