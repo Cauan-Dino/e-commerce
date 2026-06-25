@@ -67,6 +67,7 @@ class EnderecoUsuarioDB(Base):
     usuario_id: Mapped[int] = mapped_column(ForeignKey('usuario.usuario_id'),index=True)
     
     endereco_nomeado: Mapped[str] = mapped_column(String(100),index=True)
+    rua: Mapped[str] = mapped_column(String(100),index=True)
     bairro: Mapped[str] = mapped_column(String(100),index=True)
     numero: Mapped[int] = mapped_column(nullable=True)
     cidade: Mapped[str] = mapped_column(String(100),index=True)

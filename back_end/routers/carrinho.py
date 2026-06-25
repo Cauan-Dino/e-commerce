@@ -80,8 +80,7 @@ async def adicionar_produto_carrinho(body: BODYCarrinhoUsuario, db: Session = De
         carrinho = CarrinhoUsuarioDB(
             **body.model_dump(),
             usuario_id=usuario_token.usuario_id,
-            nome_produto=produto.nome_produto,
-            quantidade_produto=1
+            quantidade_produto=1   
             )
         db.add(carrinho)    
     

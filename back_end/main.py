@@ -7,8 +7,10 @@ from auth_google import router as auth_google_router
 from routers.carrinho import router as carrinho_router
 from routers.usuarios import router as usuarios_router
 from routers.endereco import router as endereco_router
-from routers.compra import router as compra_router
+from routers.cartoes import router as configuracao_cartoes_de_credito
 from routers.produtos import router as produtos_router
+from routers.compra_via_boleto import router as compra_via_boleto
+from routers.compra_via_cartao import router as compra_via_cartao
 
 app = FastAPI()
 
@@ -27,5 +29,7 @@ app.include_router(auth_google_router)
 app.include_router(carrinho_router)
 app.include_router(usuarios_router)
 app.include_router(endereco_router)
-app.include_router(compra_router)
+app.include_router(configuracao_cartoes_de_credito)
 app.include_router(produtos_router)
+app.include_router(compra_via_boleto)
+app.include_router(compra_via_cartao)

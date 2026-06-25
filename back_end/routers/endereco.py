@@ -46,6 +46,8 @@ async def mostrar_endereco(db: Session = Depends(sessao_db), usuario_token: Usua
 
     return {'enderecos': dicionario_redis}
 
+
+
 # Adiciona um endereco da casa do usuario
 @router.post('/site/endereco')
 async def criar_endereco(body: BODYEnderecoUsuario, db: Session = Depends(sessao_db), usuario_token: UsuarioDB = Depends(verificar_token_access)):
@@ -65,8 +67,28 @@ async def criar_endereco(body: BODYEnderecoUsuario, db: Session = Depends(sessao
             detail='Esse endereco ja existe'
         )
     
+    # Tira o "-" do CEP
+    cep_formatado = "".join(filter(str.isnumeric,body.cep))
+    
+    # Verifica se ha 8 digitos
+    if len(cep_formatado) != 8:
+        raise HTTPException(
+            status_code=400,
+            detail='Informe um CEP válido!'
+        )
+
     # Adiciona o endereco no banco de dados
-    adicionar_endereco = EnderecoUsuarioDB(**body.model_dump(), usuario_id=usuario_token.usuario_id)
+    adicionar_endereco = EnderecoUsuarioDB(
+        endereco_nomeado=body.endereco_nomeado,
+        rua=body.rua,
+        bairro=body.bairro,
+        numero=body.numero,
+        cidade=body.cidade.upper(),
+        estado=body.estado,
+        cep=cep_formatado,
+        complemento=body.complemento,
+        usuario_id=usuario_token.usuario_id
+    )
     db.add(adicionar_endereco)
     db.commit()
     db.refresh(adicionar_endereco)
@@ -79,6 +101,8 @@ async def criar_endereco(body: BODYEnderecoUsuario, db: Session = Depends(sessao
         redis_client.delete(f'endereco:{usuario_token.usuario_id}')
 
     return adicionar_endereco
+
+
 
 # Deleta um endereco do usuario
 @router.delete('/site/endereco/{nome_endereco}')
@@ -130,24 +154,44 @@ async def alterar_endereco(
     # Verifica se o campo endereco_nomeado esta preenchido
     if body.endereco_nomeado is not None:
         endereco.endereco_nomeado = body.endereco_nomeado
+    
     # Verifica se o campo bairro esta preenchido
     if body.bairro is not None:
         endereco.bairro = body.bairro
+    
     # Verifica se o campo numero esta preenchido
     if body.numero is not None:
         endereco.numero = body.numero
+    
     # Verifica se o campo cidade esta preenchido
     if body.cidade is not None:
         endereco.cidade = body.cidade
+    
     # Verifica se o campo estado esta preenchido
     if body.estado is not None:
-        endereco.estado = body.estado
+        endereco.estado = body.estado.upper()
+    
     # Verifica se o campo cep esta preenchido
     if body.cep is not None:
-        endereco.cep = body.cep
+        
+        # Tira o "-" do CEP
+        cep_formatado = "".join(filter(str.isnumeric,body.cep))
+        
+        # Verifica se ha 8 digitos
+        if len(cep_formatado) != 8:
+            raise HTTPException(
+                status_code=400,
+                detail='Informe um CEP válido!'
+            )
+        endereco.cep = cep_formatado
+
     # Verifica se o campo complemento esta vazio
     if body.complemento is not None:
         endereco.complemento = body.complemento
+    
+    # Verifica se o campo rua esta vazio
+    if body.rua is not None:
+        endereco.rua = body.rua
     
     db.commit()
     db.refresh(endereco)

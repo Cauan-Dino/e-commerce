@@ -12,7 +12,8 @@ from banco_dados import sessao_db, UsuarioDB
 from auth_token import verificar_token_access, criar_token_acesso, criar_token_refresh
 from body_models import BODYUsuario, BODYCadastrarUsuario, BODYEnviarEmailParaExcluirConta,BODYResetSenhaRequest,BODYRecuperarSenha,BODYExcluirConta
 from routers.dependencias import autorizacao
-from kafka_configs.producer import enviar_tarefa
+from celery_app.tasks.envia_email import enviar_email
+from celery_app.tasks.enviar_email_para_excluir_conta import enviar_email_para_excluir_conta
 from fastapi.security import OAuth2PasswordRequestForm
 
 router = APIRouter(tags=['Clientes'])
@@ -97,7 +98,7 @@ async def login_site_usuario(body: BODYUsuario, db: Session = Depends(sessao_db)
             detail='Senha ou email incorretos'
         )
     
-    if usuario.senha_usuario is None:
+    if usuario.senha_usuario is None and usuario.google_id:
         raise HTTPException(
             status_code=401,
             detail='Esta conta foi criada via Google. Por favor, use o login social.'
@@ -196,7 +197,7 @@ async def enviar_processo_recuperacao(body: BODYRecuperarSenha, db: Session = De
     }
     
     # Envia a tarefa para o producer
-    enviar_tarefa('enviar_email', dict_info)
+    enviar_email.delay(dict_info)
 
     return {"message": "Processo iniciado! Verifique seu e-mail em instantes."}
 
@@ -298,7 +299,7 @@ async def enviar_email_para_excluir_usuario(
         'email': body.email
     }
 
-    enviar_tarefa('enviar_email_para_excluir_conta',dict_info)
+    enviar_email_para_excluir_conta.delay(dict_info)
 
     return {'message': 'Confirme a exclusão da sua conta no email.'}
 

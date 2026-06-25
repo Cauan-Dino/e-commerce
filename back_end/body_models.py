@@ -29,10 +29,11 @@ class BODYCarrinhoUsuario(BaseModel):
 
 # Cadastra um endereco pro usuario
 class BODYEnderecoUsuario(BaseModel):
+    rua: str
     bairro: str
     numero: Optional[int] = None
     cidade: str
-    estado: str
+    estado: str = Field(..., min_length=2, max_length=2, description="Sigla do estado (ex: MA)")
     endereco_nomeado: str
     cep: str
     complemento: Optional[str] = None
@@ -57,11 +58,6 @@ class BODYCartaoSalvoResponse(BaseModel):
 
     class Config:
         from_attributes = True  # Permite que o Pydantic leia o objeto do SQLAlchemy (CartoesDB)
-
-# Confirmar o pagamento
-class BODYConfirmarPagamento(BaseModel):
-    endereco_nomeado: str
-    nome_cartao: str
 
 # BODY Para escolher o nome do endereco
 class BODYNomeEndereco(BaseModel):
@@ -94,10 +90,11 @@ class BODYCartaoPUT(BaseModel):
 class BODYEnderecoUsuarioPUT(BaseModel):
     usuario_id: int
     endereco_nomeado: Optional[str] = None
+    rua: Optional[str] = None
     bairro: Optional[str] = None
     numero: Optional[int] = None
     cidade: Optional[str] = None
-    estado: Optional[str] = None
+    estado: Optional[str] = Field(min_length=2, max_length=2, description="Sigla do estado (ex: MA)")
     cep: Optional[str] = None
     complemento: Optional[str] = None
 
@@ -117,3 +114,10 @@ class BODYItemCompra(BaseModel):
     token_cartao: str  
     valor_em_centavos: int  # R$ 10,00 reais = 1000 centavos
     descricao: str
+    endereco_nomeado: str
+    nome_cartao: str
+
+class BODYCompraViaBoleto(BaseModel):
+    endereco_nomeado: str
+    cpf: str
+    valor_em_centavos: int

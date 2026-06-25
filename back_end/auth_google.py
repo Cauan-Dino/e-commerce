@@ -61,37 +61,34 @@ async def auth_google(code: str, db: Session = Depends(sessao_db)):
     # 3. Lógica de Banco de Dados
     google_id = user_info.get("sub")
     email_google = user_info.get("email")
+    nome_usuario = user_info.get('name')
 
     usuario = db.query(UsuarioDB).filter(
         or_(UsuarioDB.google_id == google_id, UsuarioDB.email == email_google)
     ).first()
 
-    # Validação: Se o usuário já existe, mas está inativo, barra o login imediatamente
-    if usuario and not usuario.usuario_ativo:
-        raise HTTPException(
-            status_code=403, 
-            detail="Esta conta de usuário está inativa. Entre em contato com o suporte."
-        )
-
     try:
+        # Validação: Se o usuário já existe
+        if usuario:
+            # Ele existe, mas estava inativo (Reativa a conta se essa for a sua regra)
+            if not usuario.usuario_ativo:
+                usuario.usuario_ativo = True
+            # Se entrou por e-mail/senha antes, vincula o google_id agora
+            if usuario.google_id is None:
+                usuario.google_id = google_id
+            
         # Se não existe, cria um novo (garanta que o padrão de 'usuario_ativo' seja True no seu Model ou defina aqui)
-        if not usuario:
+        else:
             usuario = UsuarioDB(
-                nome_usuario=user_info.get("name"),
+                nome_usuario=nome_usuario,
                 email=email_google,
                 google_id=google_id,
                 senha_usuario=None,
                 usuario_ativo=True
             )
             db.add(usuario)
-            db.commit()
-            db.refresh(usuario)
-        else:
-            # Se existe e tem o google_id vazio (ex: conta criada via formulário antes), vincula o ID do Google
-            if usuario.google_id is None:
-                usuario.google_id = google_id
-                db.commit()
-                db.refresh(usuario)
+        db.commit()
+        db.refresh(usuario)
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Erro ao processar usuário no banco de dados")

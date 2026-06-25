@@ -65,24 +65,17 @@ services:
       - ../front_end:/front_end
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
-  worker:
-    container_name: worker_main
-    
+  celery:
     build: .
-    
-    depends_on:
-      kafka:
-        condition: service_healthy
-    
+    container_name: celery_app
+  
     env_file:
       - env_test.env
     
     volumes:
       - .:/app
     
-    command: python -m kafka_configs.worker
-    
-    restart: unless-stopped
+    command: poetry run celery -A celery_app.celery_app worker --loglevel=info
   kafka-ui:
     container_name: kakfa_interface
     
