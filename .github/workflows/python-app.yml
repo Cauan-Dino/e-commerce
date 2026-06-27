@@ -1,0 +1,152 @@
+name: Python application
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  fastapi-tests:
+    runs-on: ubuntu-latest
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      zookeeper:
+        image: confluentinc/cp-zookeeper:7.5.0
+        ports:
+          - 2181:2181
+        env:
+          ZOOKEEPER_CLIENT_PORT: 2181
+          ZOOKEEPER_TICK_TIME: 2000
+
+      kafka:
+        image: confluentinc/cp-kafka:7.5.0
+        ports:
+          - "9092:9092"
+        env:
+          KAFKA_BROKER_ID: 1
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
+          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    
+    env:
+      ALGORITHM: ${{ vars.ALGORITHM }}
+      CHAVE_PIX: ${{ vars.CHAVE_PIX }}
+      CPF_CRYPTO_KEY: ${{ vars.CPF_CRYPTO_KEY }}
+      DATABASE_URL: ${{ vars.DATABASE_URL }}
+      EMAIL_PASS: ${{ vars.EMAIL_PASS }}
+      EMAIL_USER: ${{ vars.EMAIL_USER }}
+      GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+      GOOGLE_CLIENT_SECRET: ${{ vars.GOOGLE_CLIENT_SECRET }}
+      GOOGLE_REDIRECT_URI: ${{ vars.GOOGLE_REDIRECT_URI }}
+      KAFKA_SERVER: ${{ vars.KAFKA_SERVER }}
+      REDIS_DB: ${{ vars.REDIS_DB }}
+      REDIS_HOST: ${{ vars.REDIS_HOST }}
+      REDIS_PORT: ${{ vars.REDIS_PORT }}
+      SECRET_KEY: ${{ vars.SECRET_KEY }}
+      SECRET_KEY_TOKEN: ${{ vars.SECRET_KEY_TOKEN }}
+      SENHA: ${{ vars.SENHA }}
+      SMTP_PORT: ${{ vars.SMTP_PORT }}
+      SMTP_SERVER: ${{ vars.SMTP_SERVER }}
+      STRIPE_PUBLISHABLE_KEY: ${{ vars.STRIPE_PUBLISHABLE_KEY }}
+      STRIPE_SECRET_KEY: ${{ vars.STRIPE_SECRET_KEY }}
+      STRIPE_WEBHOOK_SECRET: ${{ vars.STRIPE_WEBHOOK_SECRET }}
+      TEMPO_ACCESS: ${{ vars.TEMPO_ACCESS }}
+      TEMPO_ACESSO_GOOGLE: ${{ vars.TEMPO_ACESSO_GOOGLE }}
+      TEMPO_REFRESH: ${{ vars.TEMPO_REFRESH }}
+      USUARIO: ${{ vars.USUARIO }}  
+        
+    steps:
+      - name: 💾 Checkout do código
+        run: actions/checkout@v3
+
+      - name: 🦅 Instalar poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      
+      - name: 🐍 Configurar Python e Cache do Poetry
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.13'
+          cache: 'poetry'
+      
+      - name: 📦 Instalar depedências com o Poetry
+        run: poetry install --no-interaction --no-root
+      
+      - name: 🗄️ Verificar conexão com o Banco De Dados
+        run: |
+          echo "Validando conexão com o Banco de Dados"
+          poetry run python -c "
+          import asyncio
+          from sqlalchemy.ext.asyncio import create_async_engine
+          import os
+  
+          DATABASE_URL = os.getenv('DATABASE_URL')
+          async def check():
+            engine = create_async_engine(DATABASE_URL)
+            async with engine.connect() as conn:
+              await conn.execute(__import__('sqlalchemy').text('SELECT 1'))
+            print('✅ Banco de dados respondendo perfeitamente!')
+          asyncio.run(check())
+          "
+          
+      - name: ⚡ Validar conexão com o Redis
+        run: |
+          echo "Validando conexão com o Redis"
+          poetry run python -c "
+          import redis
+          import os
+          import sys
+          try:
+            REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+            REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+            redis_client = redis.Redis(host=REDIS_HOST, db=0, decode_responses=True, port=REDIS_PORT, socket_connect_timeout=3)
+            if redis_client.ping():
+              print('✅ Conexão com Redis estabelecida com sucesso!')
+          except Exception as e:
+            print(f'❌ Erro ao conectar com o Redis: {e}')
+            sys.exit(1)
+          "
+          
+      - name: Start Celery Worker (In Background)
+        run: |
+          poetry run celery -A celery_app.celery_app worker --loglevel=info &
+          
+      - name: Validar se o Celery Worker subiu com sucesso
+        run: |
+          sleep 3
+          poetry run celery -A celery_app.celery_app inspect ping
+      - name: 🌊 Validar conexão com o Kafka
+        run: |
+          echo "Aguardando Kafka iniciar..."
+          sleep 30
+          echo "Validando conexão com o Kafka"
+          poetry run python -c "
+          import sys
+          from confluent_kafka.admin import AdminClient
+          conf = {'bootstrap.servers': 'localhost:9092'}
+          client = AdminClient(conf)
+          try:
+            metadata = client.list_topics(timeout=10.0)
+            print('✅ Kafka está ONLINE!')
+          except Exception as e:
+            print(f'❌ Kafka está OFFLINE. Erro: {e}')
+            sys.exit(1)
+          "
+      - name: 🧪 Rodar testes
+        run: echo "Sem testes configurados ainda"
+          
