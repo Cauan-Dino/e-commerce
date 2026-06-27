@@ -85,6 +85,7 @@ jobs:
           cache: 'poetry'
       
       - name: 📦 Instalar depedências com o Poetry
+        working-directory: ./back_end
         run: poetry install --no-interaction --no-root
       
       - name: 🗄️ Verificar conexão com o Banco De Dados
