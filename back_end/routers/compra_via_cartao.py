@@ -127,7 +127,7 @@ async def realizar_cobranca(
                 # Se o dinheiro saiu do cliente, mas seu banco falhou ao salvar a baixa, fazemos rollback
                 db.rollback()
                 # O ideal aqui é registrar um log crítico e dar um estorno (Refund) automático na Stripe
-                # stripe.Refund.create(charge=cobranca.id)
+                stripe.Refund.create(charge=cobranca.id)
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Pagamento aprovado, mas houve uma falha ao processar o pedido internamente. O suporte foi notificado."
