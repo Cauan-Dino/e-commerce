@@ -33,6 +33,7 @@ dependencies = [
     "pillow (>=12.2.0,<13.0.0)",
     "validate-docbr (>=2.0.0,<3.0.0)",
     "celery (>=5.6.3,<6.0.0)",
+    "aiosqlite (>=0.22.1,<0.23.0)",
 ]
 
 [tool.poetry]
@@ -46,5 +47,6 @@ build-backend = "poetry.core.masonry.api"
 pythonpath = ["."]
 [dependency-groups]
 dev = [
-    "pytest-mock (>=3.15.1,<4.0.0)"
+    "pytest-mock (>=3.15.1,<4.0.0)",
+    "pytest (>=9.1.1,<10.0.0)"
 ]
