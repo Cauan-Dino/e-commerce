@@ -89,6 +89,7 @@ jobs:
         run: poetry install --no-interaction --no-root
       
       - name: 🗄️ Verificar conexão com o Banco De Dados
+        working-directory: ./back_end
         run: |
           echo "Validando conexão com o Banco de Dados"
           poetry run python -c "
@@ -106,6 +107,7 @@ jobs:
           "
           
       - name: ⚡ Validar conexão com o Redis
+        working-directory: ./back_end
         run: |
           echo "Validando conexão com o Redis"
           poetry run python -c "
@@ -124,14 +126,18 @@ jobs:
           "
           
       - name: Start Celery Worker (In Background)
+        working-directory: ./back_end
         run: |
           poetry run celery -A celery_app.celery_app worker --loglevel=info &
           
       - name: Validar se o Celery Worker subiu com sucesso
+        working-directory: ./back_end
         run: |
           sleep 3
           poetry run celery -A celery_app.celery_app inspect ping
+          
       - name: 🌊 Validar conexão com o Kafka
+        working-directory: ./back_end
         run: |
           echo "Aguardando Kafka iniciar..."
           sleep 30
